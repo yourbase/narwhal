@@ -1,0 +1,11 @@
+dependencies:
+  build:
+    - go:1.13
+
+build_targets:
+  - name: default
+    host_only: true
+    commands:
+      - go get
+      - go build
+      - go test
