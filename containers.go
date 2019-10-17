@@ -63,6 +63,9 @@ type ContainerDefinition struct {
 	Privileged    bool
 	PortWaitCheck PortWaitCheck `yaml:"port_check"`
 	Label         string        `yaml:"label"`
+	ExecUserId    string
+	ExecGroupId   string
+	Namespace     string
 }
 
 func (c ContainerDefinition) ImageNameWithTag() string {
@@ -83,41 +86,25 @@ func (c ContainerDefinition) ImageTag() string {
 	}
 }
 
-type ContainerOpts struct {
-	ContainerOpts ContainerDefinition
-	Label         string
-	HostWorkDir   string
-	ExecUserId    string // who to run exec as (useful for local container builds which map the source)
-	ExecGroupId   string
-	MountWorkDir  bool
-	Namespace     string // A namespace for prefixing container names
-}
-
-func (opts ContainerOpts) containerName() string {
-	cd := opts.ContainerOpts
+func (cd ContainerDefinition) containerName() string {
 	s := strings.Split(cd.Image, ":")
 	imageName := s[0]
 	containerImageName := strings.Replace(imageName, "/", "_", -1)
 
-	containerName := fmt.Sprintf("%s-%s", opts.Label, containerImageName)
+	containerName := fmt.Sprintf("%s-%s", cd.Label, containerImageName)
 
-	if cd.Label != "" {
-		containerName = fmt.Sprintf("%s-%s", containerName, cd.Label)
-	}
-
-	// Prefix container name with the namespace
-	if opts.Namespace != "" {
-		containerName = fmt.Sprintf("%s-%s", opts.Namespace, containerName)
+	if cd.Namespace != "" {
+		containerName = fmt.Sprintf("%s-%s", cd.Namespace, containerName)
 	}
 
 	return sanitizeContainerName(containerName)
 }
 
 type Container struct {
-	Id      string
-	Name    string
-	Options ContainerOpts
-	IPv4    string
+	Id         string
+	Name       string
+	IPv4       string
+	Definition ContainerDefinition
 }
 
 func sanitizeContainerName(proposed string) string {
@@ -141,9 +128,9 @@ func sanitizeContainerName(proposed string) string {
 }
 
 // TODO: make sure the opts match the existing container
-func FindContainer(opts ContainerOpts) (*Container, error) {
+func FindContainer(cd ContainerDefinition) (*Container, error) {
 
-	containerName := opts.containerName()
+	containerName := cd.containerName()
 
 	client := DockerClient()
 	log.Debugf("Looking for container: %s", containerName)
@@ -167,9 +154,9 @@ func FindContainer(opts ContainerOpts) (*Container, error) {
 			return nil, err
 		} else {
 			bc := Container{
-				Id:      c.ID,
-				Name:    containerName,
-				Options: opts,
+				Id:         c.ID,
+				Name:       containerName,
+				Definition: cd,
 			}
 			return &bc, nil
 		}
@@ -528,7 +515,7 @@ func (b Container) MakeDirectoryInContainer(path string) error {
 	cmdArray := strings.Split(fmt.Sprintf("mkdir -p %s", path), " ")
 
 	execOpts := docker.CreateExecOptions{
-		Env:          b.Options.ContainerOpts.Environment,
+		Env:          b.Definition.Environment,
 		Cmd:          cmdArray,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -584,8 +571,8 @@ func (b Container) ExecToWriterWithEnv(cmdString string, targetDir string, outpu
 		WorkingDir:   targetDir,
 	}
 
-	if b.Options.ExecUserId != "" || b.Options.ExecGroupId != "" {
-		uidGid := fmt.Sprintf("%s:%s", b.Options.ExecUserId, b.Options.ExecGroupId)
+	if b.Definition.ExecUserId != "" || b.Definition.ExecGroupId != "" {
+		uidGid := fmt.Sprintf("%s:%s", b.Definition.ExecUserId, b.Definition.ExecGroupId)
 		execOpts.User = uidGid
 	}
 
@@ -619,54 +606,29 @@ func (b Container) ExecToWriterWithEnv(cmdString string, targetDir string, outpu
 
 }
 
-func newContainer(opts ContainerOpts) (Container, error) {
-	containerDef := opts.ContainerOpts
-
+func newContainer(containerDef ContainerDefinition) (Container, error) {
 	client := DockerClient()
 
 	if containerDef.Image == "" {
 		containerDef.Image = DEFAULT_YB_CONTAINER
 	}
 
-	containerName := opts.containerName()
+	containerName := containerDef.containerName()
 	log.Infof("Creating container '%s'", containerName)
 
 	PullImage(containerDef)
 
 	var mounts = make([]docker.HostMount, 0)
 
-	buildRoot := opts.HostWorkDir
-	pkgWorkdir := filepath.Join(buildRoot, opts.Label)
-
 	for _, mountSpec := range containerDef.Mounts {
 		s := strings.Split(mountSpec, ":")
 		src := s[0]
-
-		if !strings.HasPrefix(src, "/") {
-			src = filepath.Join(pkgWorkdir, src)
-			MkdirAsNeeded(src)
-		}
-
 		dst := s[1]
 
 		log.Infof("Will mount %s as %s in container", src, dst)
 		mounts = append(mounts, docker.HostMount{
 			Source: src,
 			Target: dst,
-			Type:   "bind",
-		})
-	}
-
-	if opts.MountWorkDir {
-		sourceMapDir := "/workspace"
-		if containerDef.WorkDir != "" {
-			sourceMapDir = containerDef.WorkDir
-		}
-
-		log.Infof("Will mount work dir %s at %s in container", opts.HostWorkDir, sourceMapDir)
-		mounts = append(mounts, docker.HostMount{
-			Source: opts.HostWorkDir,
-			Target: sourceMapDir,
 			Type:   "bind",
 		})
 	}
@@ -700,15 +662,15 @@ func newContainer(opts ContainerOpts) (Container, error) {
 	}
 
 	config := docker.Config{
-		Env:          opts.ContainerOpts.Environment,
+		Env:          containerDef.Environment,
 		AttachStdout: false,
 		AttachStdin:  false,
 		Image:        containerDef.Image,
 		PortSpecs:    ports,
 	}
 
-	if len(opts.ContainerOpts.Command) > 0 {
-		cmd := opts.ContainerOpts.Command
+	if len(containerDef.Command) > 0 {
+		cmd := containerDef.Command
 		log.Debugf("Will run %s in the container", cmd)
 		cmdParts := strings.Split(cmd, " ")
 		config.Cmd = cmdParts
@@ -728,9 +690,9 @@ func newContainer(opts ContainerOpts) (Container, error) {
 	log.Debugf("Found container ID: %s", container.ID)
 
 	return Container{
-		Name:    containerName,
-		Id:      container.ID,
-		Options: opts,
+		Name:       containerName,
+		Id:         container.ID,
+		Definition: containerDef,
 	}, nil
 }
 
@@ -831,5 +793,46 @@ func archiveFile(source string, target string, tarfile string) error {
 	tarball.Close()
 
 	return nil
+}
 
+func CountLayersInImage(imageID string) (int, error) {
+	client := DockerClient()
+
+	img, err := client.InspectImage(imageID)
+	if err != nil {
+		return -1, fmt.Errorf("Couldn't get image info for image ID: %s", imageID)
+	}
+
+	rootFs := img.RootFS
+	layerDepth := len(rootFs.Layers)
+
+	return layerDepth, nil
+}
+
+func FindDockerImagesByTagPrefix(imageName string) ([]docker.APIImages, error) {
+
+	client := DockerClient()
+	filters := make(map[string][]string)
+
+	opts := docker.ListImagesOptions{
+		Filters: filters,
+	}
+
+	imgs, err := client.ListImages(opts)
+	if err != nil {
+		return []docker.APIImages{}, fmt.Errorf("Error getting image list: %v\n", err)
+	}
+
+	matchingImages := make([]docker.APIImages, 0)
+	if len(imgs) > 0 {
+		for _, img := range imgs {
+			for _, tag := range img.RepoTags {
+				if strings.HasPrefix(tag, imageName) {
+					matchingImages = append(matchingImages, img)
+				}
+			}
+		}
+	}
+
+	return matchingImages, nil
 }

@@ -40,19 +40,16 @@ func TestNewServiceContext(t *testing.T) {
 		},
 	}
 
-	sc, err := NewServiceContext("testapp-default", containers)
+	sc, err := NewServiceContext("testapp-default")
 	if err != nil {
 		t.Errorf("Error creating context: %v", err)
 	}
 
-	err = sc.CreateNetwork()
-	if err != nil {
-		t.Errorf("Error creating network: %v", err)
-	}
-
-	err = sc.StandUp()
-	if err != nil {
-		t.Errorf("Error standing up containers: %v", err)
+	for _, c := range containers {
+		_, err := sc.StartContainer(c)
+		if err != nil {
+			t.Errorf("Error standing up container: %v", err)
+		}
 	}
 
 	c := sc.GetContainerByLabel("redis")
