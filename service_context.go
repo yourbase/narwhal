@@ -71,6 +71,7 @@ func (sc *ServiceContext) GetContainerByLabel(label string) *Container {
 }
 
 func (sc *ServiceContext) FindContainer(cd ContainerDefinition) (*Container, error) {
+	cd.Namespace = sc.Id
 	return FindContainer(cd)
 }
 
