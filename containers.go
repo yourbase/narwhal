@@ -168,7 +168,7 @@ func FindContainer(cd ContainerDefinition) (*Container, error) {
 
 func StopContainerById(id string, timeout uint) error {
 	client := DockerClient()
-	log.Infof("Stopping container %s with a %d second timeout...", id, timeout)
+	log.Debugf("Stopping container %s with a %d second timeout...", id, timeout)
 	return client.StopContainer(id, timeout)
 }
 
@@ -352,7 +352,7 @@ func (b Container) IsRunning() (bool, error) {
 
 func (b Container) Stop(timeout uint) error {
 	client := DockerClient()
-	log.Infof("Stopping container %s with a %d timeout...", b.Id, timeout)
+	log.Debugf("Stopping container %s with a %d timeout...", b.Id, timeout)
 	return client.StopContainer(b.Id, timeout)
 }
 

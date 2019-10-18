@@ -75,7 +75,7 @@ func (sc *ServiceContext) FindContainer(cd ContainerDefinition) (*Container, err
 }
 
 func (sc *ServiceContext) TearDown() error {
-	log.Infof("Terminating services...")
+	log.Infof("Terminating containers...")
 
 	for _, c := range sc.ContainerDefinitions {
 		log.Infof("  %s...", c.Image)
@@ -87,10 +87,9 @@ func (sc *ServiceContext) TearDown() error {
 		}
 
 		if container != nil {
-			log.Infof(" %s", container.Id)
 			container.Stop(0)
 			if err := container.Destroy(); err != nil {
-				log.Warnf("Unable to destroy container: %v", err)
+				log.Warnf("Unable to destroy container %s: %v", container.Id, err)
 			}
 		}
 	}
