@@ -312,9 +312,10 @@ func (b Container) WaitForTcpPort(port int, timeout int) error {
 	timeWaited := 0
 	secondsToSleep := 1
 	sleepTime := time.Duration(secondsToSleep) * time.Second
+	dialTimeout := time.Duration(timeout) * time.Second
 
 	for timeWaited < timeout {
-		conn, err := net.Dial("tcp", hostPort)
+		conn, err := net.DialTimeout("tcp", hostPort, dialTimeout)
 		if err != nil {
 			// Pass for now
 			timeWaited = timeWaited + secondsToSleep
