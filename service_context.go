@@ -173,23 +173,23 @@ func (sc *ServiceContext) startContainer(cd ContainerDefinition) (*Container, er
 
 	running, err := container.IsRunning()
 	if err != nil {
-		return nil, fmt.Errorf("Couldn't determine if container is running: %v", err)
+		return container, fmt.Errorf("Couldn't determine if container is running: %v", err)
 	}
 
 	if !running {
 		log.Infof("Starting container for %s...", cd.Image)
 		if err = container.Start(); err != nil {
-			return nil, fmt.Errorf("Couldn't start container %s: %v", container.Id, err)
+			return container, fmt.Errorf("Couldn't start container %s: %v", container.Id, err)
 		}
 	}
 
 	ipv4, err := container.IPv4Address()
 	if err != nil {
-		return nil, fmt.Errorf("Couldn't determine IP of container dependency %s (%s): %v", cd.Label, container.Id, err)
+		return container, fmt.Errorf("Couldn't determine IP of container dependency %s (%s): %v", cd.Label, container.Id, err)
 	}
 
 	if ipv4 == "" {
-		return nil, fmt.Errorf("Container didn't get an IP address -- check the logs for container %s", container.Id[0:12])
+		return container, fmt.Errorf("Container didn't get an IP address -- check the logs for container %s", container.Id[0:12])
 	}
 	log.Infof("Container IP: %s", ipv4)
 
@@ -198,7 +198,7 @@ func (sc *ServiceContext) startContainer(cd ContainerDefinition) (*Container, er
 		log.Infof("Waiting up to %ds for %s:%d to be ready... ", check.Timeout, ipv4, check.Port)
 		if err := container.WaitForTcpPort(check.Port, check.Timeout); err != nil {
 			log.Warnf("Timed out!")
-			return nil, fmt.Errorf("Timeout occured waiting for container '%s' to be ready", cd.Label)
+			return container, fmt.Errorf("Timeout occured waiting for container '%s' to be ready", cd.Label)
 		}
 	}
 
