@@ -108,6 +108,20 @@ func (sc *ServiceContext) TearDown() error {
 }
 
 func (sc *ServiceContext) StartContainer(cd ContainerDefinition) (*Container, error) {
+	container, err := sc.startContainer(cd)
+
+	if err != nil {
+		if container != nil {
+			log.Warnf("Stopping failed-to-start container %s: %v", cd.containerName(), err)
+			container.Stop(0)
+		}
+		return nil, err
+	}
+
+	return container, nil
+}
+
+func (sc *ServiceContext) startContainer(cd ContainerDefinition) (*Container, error) {
 	dockerClient := sc.DockerClient
 
 	// Prefix the containers with our context id as the namespace
@@ -134,10 +148,12 @@ func (sc *ServiceContext) StartContainer(cd ContainerDefinition) (*Container, er
 		log.Infof("Container '%s' for %s already exists, not re-creating...", cd.containerName(), cd.Image)
 	} else {
 		c, err := newContainer(cd)
-		if err != nil {
-			return nil, err
-		}
 		container = &c
+
+		if err != nil {
+			return container, err
+		}
+
 		log.Infof("Created container: %s", container.Id)
 
 		// Attach to network
@@ -154,9 +170,6 @@ func (sc *ServiceContext) StartContainer(cd ContainerDefinition) (*Container, er
 		}
 
 	}
-
-	// Add to list of build containers
-	sc.Containers[cd.Label] = container
 
 	running, err := container.IsRunning()
 	if err != nil {
@@ -189,6 +202,8 @@ func (sc *ServiceContext) StartContainer(cd ContainerDefinition) (*Container, er
 		}
 	}
 
+	// Add to list of build containers
+	sc.Containers[cd.Label] = container
 	return container, nil
 }
 

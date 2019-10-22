@@ -42,36 +42,69 @@ func TestNewServiceContext(t *testing.T) {
 
 	sc, err := NewServiceContext("testapp-default")
 	if err != nil {
-		t.Errorf("Error creating context: %v", err)
+		t.Fatalf("Error creating context: %v", err)
 	}
+
+	defer sc.TearDown()
 
 	for _, c := range containers {
 		_, err := sc.StartContainer(c)
 		if err != nil {
-			t.Errorf("Error standing up container: %v", err)
+			t.Fatalf("Error standing up container: %v", err)
 		}
 	}
 
 	c := sc.GetContainerByLabel("redis")
 	if c == nil {
-		t.Errorf("Error getting redis by label...")
+		t.Fatalf("Error getting redis by label...")
 	}
 
 	running, err := c.IsRunning()
 	if err != nil {
-		t.Errorf("Couldn't determine if container was running: %v", err)
+		t.Fatalf("Couldn't determine if container was running: %v", err)
 	}
 
 	if !running {
-		t.Errorf("Container isn't running like it should be")
+		t.Fatalf("Container isn't running like it should be")
 	}
 
 	ip, err := c.IPv4Address()
 	if err != nil {
-		t.Errorf("Couldn't get IP for redis container: %v", err)
+		t.Fatalf("Couldn't get IP for redis container: %v", err)
 	}
 
 	fmt.Printf("IP address: %s\n", ip)
+}
+
+func TestNewServiceContextWithContainerTimeout(t *testing.T) {
+	containers := []ContainerDefinition{
+		ContainerDefinition{
+			Image:   "alpine:latest",
+			Label:   "test",
+			Command: "tail -f /dev/null",
+			PortWaitCheck: PortWaitCheck{
+				Port:    8080,
+				Timeout: 5,
+			},
+		},
+	}
+
+	sc, err := NewServiceContext("testapp-default")
+	if err != nil {
+		t.Fatalf("Error creating context: %v", err)
+	}
+
+	for _, c := range containers {
+		_, err := sc.StartContainer(c)
+		if err != nil {
+			fmt.Printf("Expected timeout standing up container: %v\n", err)
+		}
+	}
+
+	c := sc.GetContainerByLabel("test")
+	if c != nil {
+		t.Fatalf("test container should not exist")
+	}
 
 	err = sc.TearDown()
 	if err != nil {
