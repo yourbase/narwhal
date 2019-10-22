@@ -312,18 +312,31 @@ func (b Container) WaitForTcpPort(port int, timeout int) error {
 	timeWaited := 0
 	secondsToSleep := 1
 	sleepTime := time.Duration(secondsToSleep) * time.Second
-	dialTimeout := time.Duration(timeout) * time.Second
+	dialTimeout := 1 * time.Second
 
-	for timeWaited < timeout {
-		conn, err := net.DialTimeout("tcp", hostPort, dialTimeout)
-		if err != nil {
-			// Pass for now
-			timeWaited = timeWaited + secondsToSleep
-			time.Sleep(sleepTime)
-		} else {
-			conn.Close()
+	c1 := make(chan error, 1)
+	go func() {
+		for timeWaited < timeout {
+			conn, err := net.DialTimeout("tcp", hostPort, dialTimeout)
+			if err != nil {
+				// Pass for now
+				timeWaited = timeWaited + secondsToSleep
+				time.Sleep(sleepTime)
+			} else {
+				conn.Close()
+				c1 <- nil
+			}
+		}
+
+	}()
+
+	select {
+	case res := <-c1:
+		if res == nil {
 			return nil
 		}
+	case <-time.After(time.Duration(timeout) * time.Second):
+		log.Warnf("Timed out waiting for service")
 	}
 
 	return fmt.Errorf("Couldn't connect to service before specified timeout (%d sec.)", timeout)
