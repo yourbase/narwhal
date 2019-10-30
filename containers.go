@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,16 +71,20 @@ type ContainerDefinition struct {
 	Namespace     string
 }
 
-func (c ContainerDefinition) ImageNameWithTag() string {
+func (c *ContainerDefinition) AddMount(mount string) {
+	c.Mounts = append(c.Mounts, mount)
+}
+
+func (c *ContainerDefinition) ImageNameWithTag() string {
 	return fmt.Sprintf("%s:%s", c.ImageName(), c.ImageTag())
 }
 
-func (c ContainerDefinition) ImageName() string {
+func (c *ContainerDefinition) ImageName() string {
 	parts := strings.Split(c.Image, ":")
 	return parts[0]
 }
 
-func (c ContainerDefinition) ImageTag() string {
+func (c *ContainerDefinition) ImageTag() string {
 	parts := strings.Split(c.Image, ":")
 	if len(parts) != 2 {
 		return "latest"
@@ -88,15 +93,15 @@ func (c ContainerDefinition) ImageTag() string {
 	}
 }
 
-func (cd ContainerDefinition) containerName() string {
-	s := strings.Split(cd.Image, ":")
+func (c *ContainerDefinition) containerName() string {
+	s := strings.Split(c.Image, ":")
 	imageName := s[0]
 	containerImageName := strings.Replace(imageName, "/", "_", -1)
 
-	containerName := fmt.Sprintf("%s-%s", cd.Label, containerImageName)
+	containerName := fmt.Sprintf("%s-%s", c.Label, containerImageName)
 
-	if cd.Namespace != "" {
-		containerName = fmt.Sprintf("%s-%s", cd.Namespace, containerName)
+	if c.Namespace != "" {
+		containerName = fmt.Sprintf("%s-%s", c.Namespace, containerName)
 	}
 
 	return sanitizeContainerName(containerName)
@@ -151,10 +156,31 @@ func FindContainer(cd ContainerDefinition) (*Container, error) {
 		}
 		c := result[0]
 		log.Debugf("Found container %s with ID %s", containerName, c.ID)
-		_, err := client.InspectContainer(c.ID)
+		container, err := client.InspectContainer(c.ID)
 		if err != nil {
 			return nil, err
 		} else {
+			// Darwin -- lookup the mapping and use that
+			if runtime.GOOS == "darwin" {
+				portCheckPort := cd.PortWaitCheck.Port
+				if portCheckPort != 0 {
+					portBindings := container.NetworkSettings.Ports
+					for k, v := range portBindings {
+
+						parts := strings.Split(string(k), "/")
+						if len(parts) == 2 {
+							port, _ := strconv.Atoi(parts[0])
+							if port == portCheckPort {
+								if len(v) == 1 {
+									localPort, _ := strconv.Atoi(v[0].HostPort)
+									cd.PortWaitCheck.LocalPortMap = localPort
+								}
+							}
+						}
+					}
+				}
+			}
+
 			bc := Container{
 				Id:         c.ID,
 				Name:       containerName,
