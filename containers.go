@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -49,8 +50,9 @@ func MkdirAsNeeded(dir string) error {
 const DEFAULT_YB_CONTAINER = "yourbase/yb_ubuntu:18.04"
 
 type PortWaitCheck struct {
-	Port    int `yaml:"port"`
-	Timeout int `yaml:"timeout"`
+	Port         int `yaml:"port"`
+	Timeout      int `yaml:"timeout"`
+	LocalPortMap int
 }
 
 type ContainerDefinition struct {
@@ -302,12 +304,19 @@ func (b Container) EnsureRunning(uptime int) error {
 }
 
 func (b Container) WaitForTcpPort(port int, timeout int) error {
-	address, err := b.IPv4Address()
-	if err != nil {
-		return fmt.Errorf("Couldn't wait for TCP port %d: %v", port, err)
-	}
 
-	hostPort := fmt.Sprintf("%s:%d", address, port)
+	var hostPort string
+
+	if b.Definition.PortWaitCheck.LocalPortMap != 0 {
+		hostPort = fmt.Sprintf("127.0.0.1:%d", b.Definition.PortWaitCheck.LocalPortMap)
+	} else {
+		address, err := b.IPv4Address()
+		if err != nil {
+			return fmt.Errorf("Couldn't wait for TCP port %d: %v", port, err)
+		}
+
+		hostPort = fmt.Sprintf("%s:%d", address, port)
+	}
 
 	timeWaited := 0
 	secondsToSleep := 1
@@ -666,6 +675,27 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 			var pb = make([]docker.PortBinding, 0)
 			pb = append(pb, docker.PortBinding{HostIP: "0.0.0.0", HostPort: externalPort})
 			bindings[portKey] = pb
+		}
+	}
+
+	if containerDef.PortWaitCheck.Port != 0 {
+		checkPort := containerDef.PortWaitCheck.Port
+		// Port wait check, need to map to localhost port if we're on Darwin (VM networking...)
+		if runtime.GOOS == "darwin" {
+			log.Infof("Port wait check on port %d; finding free local port...", checkPort)
+			localPort, err := GetFreePort()
+			if err != nil {
+				log.Errorf("Couldn't find free TCP port to forward from: %v", err)
+				return Container{}, err
+			}
+			log.Infof("Mapping %d locally to %d in the container.", localPort, checkPort)
+			containerDef.PortWaitCheck.LocalPortMap = localPort
+			pkey := docker.Port(fmt.Sprintf("%d/tcp", checkPort))
+			localPortString := fmt.Sprintf("%d", localPort)
+			pb := []docker.PortBinding{
+				docker.PortBinding{HostIP: "127.0.0.1", HostPort: localPortString},
+			}
+			bindings[pkey] = pb
 		}
 	}
 
