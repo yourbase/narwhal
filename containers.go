@@ -36,18 +36,6 @@ func DockerClient() *docker.Client {
 
 }
 
-func MkdirAsNeeded(dir string) error {
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		log.Infof("Making dir: %s", dir)
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			log.Errorf("Unable to create dir: %v", err)
-			return err
-		}
-	}
-
-	return nil
-}
-
 const DEFAULT_YB_CONTAINER = "yourbase/yb_ubuntu:18.04"
 
 type PortWaitCheck struct {
@@ -69,6 +57,33 @@ type ContainerDefinition struct {
 	ExecUserId    string
 	ExecGroupId   string
 	Namespace     string
+	LocalWorkDir  string
+}
+
+func (c *ContainerDefinition) DockerMounts() ([]docker.HostMount, error) {
+	mounts := make([]docker.HostMount, 0)
+	for _, m := range c.Mounts {
+		parts := strings.Split(m, ":")
+		if len(parts) == 2 {
+			src := parts[0]
+			dst := parts[1]
+			if src[0] != '/' {
+				src = filepath.Join(c.LocalWorkDir, src)
+			}
+			// TODO do the same for dst?
+			if !DirectoryExists(src) {
+				log.Infof("Requested local mount dir %s doesn't exit, will create", src)
+				if err := MkdirAsNeeded(src); err != nil {
+					return []docker.HostMount{}, fmt.Errorf("Couldn't make source dir %s: %v", src, err)
+				}
+			}
+			mounts = append(mounts, docker.HostMount{Source: src, Target: dst, Type: "bind"})
+		} else {
+			return []docker.HostMount{}, fmt.Errorf("Malformed mount spec: %s", m)
+		}
+	}
+
+	return mounts, nil
 }
 
 func (c *ContainerDefinition) AddMount(mount string) {
@@ -174,6 +189,7 @@ func FindContainer(cd ContainerDefinition) (*Container, error) {
 								if len(v) == 1 {
 									localPort, _ := strconv.Atoi(v[0].HostPort)
 									cd.PortWaitCheck.LocalPortMap = localPort
+									log.Infof("Will use 127.0.0.1:%d for port check", localPort)
 								}
 							}
 						}
@@ -667,19 +683,11 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 
 	PullImage(containerDef)
 
-	var mounts = make([]docker.HostMount, 0)
+	mounts, err := containerDef.DockerMounts()
 
-	for _, mountSpec := range containerDef.Mounts {
-		s := strings.Split(mountSpec, ":")
-		src := s[0]
-		dst := s[1]
-
-		log.Infof("Will mount %s as %s in container", src, dst)
-		mounts = append(mounts, docker.HostMount{
-			Source: src,
-			Target: dst,
-			Type:   "bind",
-		})
+	if err != nil {
+		log.Errorf("Invalid mounts: %v", err)
+		return Container{}, err
 	}
 
 	var ports = make([]string, 0)

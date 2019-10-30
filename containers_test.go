@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+/* TODO
+Tests for:
+* re-using existing container (linux / darwin) and port checks
+* local source mapping
+*/
+
 func TestSanitizeContainerName(t *testing.T) {
 	bogus := []string{
 		"_1234ABcd",

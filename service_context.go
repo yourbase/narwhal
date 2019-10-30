@@ -195,7 +195,7 @@ func (sc *ServiceContext) startContainer(cd ContainerDefinition) (*Container, er
 
 	if cd.PortWaitCheck.Port != 0 {
 		check := cd.PortWaitCheck
-		log.Infof("Waiting up to %ds for %s:%d to be ready... ", check.Timeout, ipv4, check.Port)
+		log.Infof("Waiting up to %ds for %s to be ready... ", check.Timeout, cd.Label)
 		if err := container.WaitForTcpPort(check.Port, check.Timeout); err != nil {
 			log.Warnf("Timed out!")
 			return container, fmt.Errorf("Timeout occured waiting for container '%s' to be ready", cd.Label)

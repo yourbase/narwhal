@@ -2,6 +2,7 @@ package narwhal
 
 import (
 	"net"
+	"os"
 )
 
 func GetFreePort() (int, error) {
@@ -16,4 +17,22 @@ func GetFreePort() (int, error) {
 	}
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+func DirectoryExists(dir string) bool {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return false
+	}
+
+	return true
+}
+
+func MkdirAsNeeded(dir string) error {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
