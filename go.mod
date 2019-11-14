@@ -1,4 +1,4 @@
-module github.com/johnewart/narwhal
+module github.com/yourbase/narwhal
 
 require (
 	github.com/johnewart/go-dockerclient v1.3.7
