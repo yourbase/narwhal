@@ -223,6 +223,14 @@ func RemoveContainerById(id string) error {
 	})
 }
 
+func RemoveContainerAndVolumesById(id string) error {
+	client := DockerClient()
+	return client.RemoveContainer(docker.RemoveContainerOptions{
+		ID:            id,
+		RemoveVolumes: true,
+	})
+}
+
 func PullImage(c ContainerDefinition) error {
 	client := DockerClient()
 	imageName := c.ImageName()
