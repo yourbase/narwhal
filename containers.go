@@ -289,11 +289,7 @@ func PullImageIfNotHere(c ContainerDefinition) error {
 }
 
 func (b Container) Destroy() error {
-	client := DockerClient()
-	opts := docker.RemoveContainerOptions{
-		ID: b.Id,
-	}
-	return client.RemoveContainer(opts)
+	return RemoveContainerAndVolumesById(b.Id)
 }
 
 func (b Container) ListNetworkIDs() ([]string, error) {
