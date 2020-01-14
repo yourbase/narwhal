@@ -72,7 +72,7 @@ func (c *ContainerDefinition) DockerMounts() ([]docker.HostMount, error) {
 			}
 			// TODO do the same for dst?
 			if !DirectoryExists(src) {
-				log.Infof("Requested local mount dir %s doesn't exit, will create", src)
+				log.Infof("Requested local mount dir %s doesn't exist, will create", src)
 				if err := MkdirAsNeeded(src); err != nil {
 					return []docker.HostMount{}, fmt.Errorf("Couldn't make source dir %s: %v", src, err)
 				}
@@ -612,6 +612,62 @@ func (b Container) MakeDirectoryInContainer(path string) error {
 
 	return nil
 
+}
+
+func (b Container) ExecInteractively(cmdString string, targetDir string) error {
+	return b.ExecInteractivelyWithEnv(cmdString, targetDir, []string{})
+}
+
+func (b Container) ExecInteractivelyWithEnv(cmdString string, targetDir string, env []string) error {
+
+	client := DockerClient()
+
+	shellCmd := []string{"bash", "-c", cmdString}
+
+	execOpts := docker.CreateExecOptions{
+		Env:          env,
+		Cmd:          shellCmd,
+		AttachStdout: true,
+		AttachStderr: true,
+		AttachStdin:  true,
+		Tty:          true,
+		Container:    b.Id,
+		WorkingDir:   targetDir,
+	}
+
+	if b.Definition.ExecUserId != "" || b.Definition.ExecGroupId != "" {
+		uidGid := fmt.Sprintf("%s:%s", b.Definition.ExecUserId, b.Definition.ExecGroupId)
+		execOpts.User = uidGid
+	}
+
+	exec, err := client.CreateExec(execOpts)
+
+	if err != nil {
+		return fmt.Errorf("Can't create exec: %v", err)
+	}
+
+	startOpts := docker.StartExecOptions{
+		OutputStream: os.Stdout,
+		ErrorStream:  os.Stderr,
+		InputStream:  os.Stdin,
+		RawTerminal:  true,
+		Tty:          true,
+	}
+
+	if err = client.StartExec(exec.ID, startOpts); err != nil {
+		return fmt.Errorf("Unable to run exec %s: %v", exec.ID, err)
+	}
+
+	results, err := client.InspectExec(exec.ID)
+	if err != nil {
+		return fmt.Errorf("Unable to get exec results %s: %v", exec.ID, err)
+	}
+
+	if results.ExitCode != 0 {
+		return fmt.Errorf("Command failed in container with status code %d", results.ExitCode)
+	}
+
+	return nil
 }
 
 func (b Container) ExecToStdoutWithEnv(cmdString string, targetDir string, env []string) error {
