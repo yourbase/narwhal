@@ -670,6 +670,15 @@ func (b Container) ExecInteractivelyWithEnv(cmdString string, targetDir string, 
 	return nil
 }
 
+type ExecError struct {
+	ExitCode int
+	Message  string
+}
+
+func (e *ExecError) Error() string {
+	return e.Message
+}
+
 func (b Container) ExecToStdoutWithEnv(cmdString string, targetDir string, env []string) error {
 	return b.ExecToWriterWithEnv(cmdString, targetDir, os.Stdout, env)
 }
@@ -724,7 +733,10 @@ func (b Container) ExecToWriterWithEnv(cmdString string, targetDir string, outpu
 	}
 
 	if results.ExitCode != 0 {
-		return fmt.Errorf("Command failed in container with status code %d", results.ExitCode)
+		return &ExecError{
+			ExitCode: results.ExitCode,
+			Message:  fmt.Sprintf("Command failed in container with status code %d", results.ExitCode),
+		}
 	}
 
 	return nil
