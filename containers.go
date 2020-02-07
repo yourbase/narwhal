@@ -763,24 +763,34 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 	}
 
 	var ports = make([]string, 0)
-	for _, portSpec := range containerDef.Ports {
-		ports = append(ports, portSpec)
-	}
-
 	var bindings = make(map[docker.Port][]docker.PortBinding)
+	var exposedPorts = make(map[docker.Port]struct{})
 
-	if len(ports) > 0 {
+	if len(containerDef.Ports) > 0 {
 		log.Infof("Will map the following ports: ")
 
 		for _, portSpec := range containerDef.Ports {
 			parts := strings.Split(portSpec, ":")
 			externalPort := parts[0]
 			internalPort := parts[1]
-			log.Infof("  * %s -> %s in container", externalPort, internalPort)
-			portKey := docker.Port(fmt.Sprintf("%s/tcp", internalPort))
+
+			protoParts := strings.Split(internalPort, "/")
+			protocol := "tcp"
+			if len(protoParts) == 2 {
+				protocol = protoParts[1]
+				internalPort = protoParts[0]
+			}
+
+			portStr := fmt.Sprintf("%s/tcp", internalPort)
+			portKey := docker.Port(portStr)
+			ports = append(ports, portStr)
+
+			log.Infof("  * %s -> %s/%s in container", externalPort, internalPort, protocol)
 			var pb = make([]docker.PortBinding, 0)
 			pb = append(pb, docker.PortBinding{HostIP: "0.0.0.0", HostPort: externalPort})
 			bindings[portKey] = pb
+			var s struct{}
+			exposedPorts[portKey] = s
 		}
 	}
 
@@ -796,12 +806,16 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 			}
 			log.Infof("Mapping %d locally to %d in the container.", localPort, checkPort)
 			containerDef.PortWaitCheck.LocalPortMap = localPort
-			pkey := docker.Port(fmt.Sprintf("%d/tcp", checkPort))
+			pstr := fmt.Sprintf("%d/tcp", checkPort)
+			pkey := docker.Port(pstr)
 			localPortString := fmt.Sprintf("%d", localPort)
 			pb := []docker.PortBinding{
 				docker.PortBinding{HostIP: "127.0.0.1", HostPort: localPortString},
 			}
 			bindings[pkey] = pb
+			var s struct{}
+			exposedPorts[pkey] = s
+			ports = append(ports, pstr)
 		}
 	}
 
@@ -817,6 +831,7 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 		AttachStdin:  false,
 		Image:        containerDef.Image,
 		PortSpecs:    ports,
+		ExposedPorts: exposedPorts,
 	}
 
 	if len(containerDef.Command) > 0 {
