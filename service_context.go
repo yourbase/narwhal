@@ -257,3 +257,15 @@ func (sc *ServiceContext) StreamContainerLogs() error {
 	*/
 	return nil
 }
+
+func (sc *ServiceContext) CreateContainer(cd ContainerDefinition) (*Container, error) {
+	c, err := newContainer(cd)
+
+	if err != nil {
+		return nil, err
+	}
+
+	log.Infof("Created container: %s", c.Id)
+
+	return &c, nil
+}
