@@ -288,6 +288,37 @@ func PullImageIfNotHere(c ContainerDefinition) error {
 
 }
 
+func BuildImageWithFile(cd ContainerDefinition, repository, tag, localFile, fileName, remotePath string) error {
+
+	err := PullImageIfNotHere(cd)
+	if err != nil {
+		return fmt.Errorf("Error pulling image (%s): %v", cd.Image, err)
+	}
+
+	container, err := newContainer(cd)
+	if err != nil {
+		return fmt.Errorf("Error creating container: %v", err)
+	}
+	defer func() {
+		err := container.Destroy()
+		if err != nil {
+			log.Errorf("Unable to destroy temporary container: %v", err)
+		}
+	}()
+
+	err = container.UploadFile(localFile, fileName, remotePath)
+	if err != nil {
+		return fmt.Errorf("Error uploading file: %v", err)
+	}
+
+	_, err = container.CommitImage(repository, tag)
+	if err != nil {
+		return fmt.Errorf("Error committing image: %v", err)
+	}
+
+	return nil
+}
+
 func (b Container) Destroy() error {
 	return RemoveContainerAndVolumesById(b.Id)
 }
