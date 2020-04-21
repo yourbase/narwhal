@@ -288,7 +288,7 @@ func PullImageIfNotHere(c ContainerDefinition) error {
 
 }
 
-func BuildImageWithFile(cd ContainerDefinition, repository, tag, localFile, fileName, remotePath string) error {
+func BuildImageWithArchive(cd ContainerDefinition, repository, tag, localFile, fileName, remotePath string) error {
 
 	err := PullImageIfNotHere(cd)
 	if err != nil {
@@ -306,7 +306,7 @@ func BuildImageWithFile(cd ContainerDefinition, repository, tag, localFile, file
 		}
 	}()
 
-	err = container.UploadFile(localFile, fileName, remotePath)
+	err = container.UploadArchive(localFile, remotePath)
 	if err != nil {
 		return fmt.Errorf("Error uploading file: %v", err)
 	}
