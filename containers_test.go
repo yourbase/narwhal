@@ -1,8 +1,16 @@
 package narwhal
 
 import (
+	"archive/tar"
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"strings"
 	"testing"
+
+	docker "github.com/johnewart/go-dockerclient"
 )
 
 /* TODO
@@ -115,5 +123,81 @@ func TestNewServiceContextWithContainerTimeout(t *testing.T) {
 	err = sc.TearDown()
 	if err != nil {
 		t.Errorf("Error tearing down network: %v", err)
+	}
+}
+
+func TestUpload(t *testing.T) {
+	client := DockerClient()
+	if client == nil {
+		t.Skip("Could not find Docker daemon connection")
+	}
+	err := PullImageIfNotHere(ContainerDefinition{
+		Image: "hello-world",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	container, err := client.CreateContainer(docker.CreateContainerOptions{
+		Config: &docker.Config{
+			Image: "hello-world",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		err := client.RemoveContainer(docker.RemoveContainerOptions{
+			ID: container.ID,
+		})
+		if err != nil {
+			t.Logf("removing container %s: %v", container.ID, err)
+		}
+	}()
+
+	b := Container{
+		Id:   container.ID,
+		Name: container.Name,
+	}
+	const path = "/foo.txt"
+	const content = "Hello, World!\n"
+	err = b.Upload(path, strings.NewReader(content), &tar.Header{
+		Typeflag: tar.TypeReg,
+		Size:     int64(len(content)),
+	})
+	if err != nil {
+		t.Error("Upload(...):", err)
+	}
+
+	buf := new(bytes.Buffer)
+	err = client.DownloadFromContainer(container.ID, docker.DownloadFromContainerOptions{
+		Path:         path,
+		OutputStream: buf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarReader := tar.NewReader(buf)
+	found := false
+	for {
+		header, err := tarReader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		t.Logf("Found %q", header.Name)
+		if header.Name != "foo.txt" {
+			continue
+		}
+		found = true
+		got, err := ioutil.ReadAll(tarReader)
+		if err != nil {
+			t.Error("Reading file:", err)
+			continue
+		}
+		if string(got) != content {
+			t.Errorf("%s content = %q; want %q", path, got, content)
+		}
+	}
+	if !found {
+		t.Errorf("%s not found", path)
 	}
 }
