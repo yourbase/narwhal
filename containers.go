@@ -2,12 +2,12 @@ package narwhal
 
 import (
 	"archive/tar"
-	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
 	"os"
+	slashpath "path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -523,70 +523,88 @@ func (b Container) DownloadDirectory(remotePath string) (string, error) {
 	return outfilePath, nil
 }
 
+// UploadStream extracts a tar archive in the given container directory.
 func (b Container) UploadStream(source io.Reader, remotePath string) error {
-	client := DockerClient()
-
-	uploadOpts := docker.UploadToContainerOptions{
+	return DockerClient().UploadToContainer(b.Id, docker.UploadToContainerOptions{
 		InputStream:          source,
 		Path:                 remotePath,
 		NoOverwriteDirNonDir: true,
-	}
-
-	err := client.UploadToContainer(b.Id, uploadOpts)
-
-	return err
+	})
 }
 
+// UploadArchive extracts the tar archive at the given local path into the given
+// container directory.
 func (b Container) UploadArchive(localFile string, remotePath string) error {
-	client := DockerClient()
-
 	file, err := os.Open(localFile)
 	if err != nil {
 		return err
 	}
-
 	defer file.Close()
-
-	uploadOpts := docker.UploadToContainerOptions{
-		InputStream:          file,
-		Path:                 remotePath,
-		NoOverwriteDirNonDir: true,
-	}
-
-	err = client.UploadToContainer(b.Id, uploadOpts)
-
-	return err
+	return b.UploadStream(file, remotePath)
 }
 
+// UploadFile sends the content of localFile (a host filesystem path) into
+// remotePath (a path to a directory inside the container) with the given
+// fileName.
 func (b Container) UploadFile(localFile string, fileName string, remotePath string) error {
-	client := DockerClient()
-
-	dir, err := ioutil.TempDir("", "yb")
+	f, err := os.Open(localFile)
 	if err != nil {
 		return err
 	}
-
-	defer os.RemoveAll(dir) // clean up
-	tmpfile, err := os.OpenFile(fmt.Sprintf("%s/%s.tar", dir, fileName), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0660)
+	defer f.Close()
+	info, err := f.Stat()
 	if err != nil {
 		return err
 	}
-
-	err = archiveFile(localFile, fileName, tmpfile.Name())
-
+	header, err := tar.FileInfoHeader(info, info.Name())
 	if err != nil {
 		return err
 	}
+	return b.Upload(slashpath.Join(remotePath, fileName), f, header)
+}
 
-	uploadOpts := docker.UploadToContainerOptions{
-		InputStream:          tmpfile,
-		Path:                 remotePath,
-		NoOverwriteDirNonDir: true,
+// Upload writes the given content to a path inside the container. header.Name
+// is entirely ignored.
+func (b Container) Upload(remotePath string, content io.Reader, header *tar.Header) error {
+	tmpFile, err := ioutil.TempFile("", "yb*.tar")
+	if err != nil {
+		return fmt.Errorf("upload file to container: %w", err)
+	}
+	defer func() {
+		name := tmpFile.Name()
+		tmpFile.Close()
+		os.Remove(name)
+	}()
+
+	remoteDir, remoteBase := slashpath.Split(remotePath)
+	realHeader := new(tar.Header)
+	*realHeader = *header
+	realHeader.Name = remoteBase
+	if err := archiveFile(tmpFile, content, realHeader); err != nil {
+		return fmt.Errorf("upload file to container: %w", err)
 	}
 
-	err = client.UploadToContainer(b.Id, uploadOpts)
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("upload file to container: %w", err)
+	}
+	if err := b.UploadStream(tmpFile, remoteDir); err != nil {
+		return fmt.Errorf("upload file to container: %w", err)
+	}
+	return nil
+}
 
-	return err
+func archiveFile(tf io.Writer, source io.Reader, header *tar.Header) error {
+	w := tar.NewWriter(tf)
+	if err := w.WriteHeader(header); err != nil {
+		return err
+	}
+	if _, err := io.Copy(w, source); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (b Container) CommitImage(repository string, tag string) (string, error) {
@@ -911,84 +929,6 @@ func FindNetworkByName(name string) (*docker.Network, error) {
 
 	network := networks[0]
 	return &network, nil
-}
-
-func archiveFileInMemory(source string, target string) (*tar.Reader, error) {
-	var buf bytes.Buffer
-
-	tarball := tar.NewWriter(&buf)
-	defer tarball.Close()
-
-	info, err := os.Stat(source)
-	if err != nil {
-		return nil, err
-	}
-
-	header, err := tar.FileInfoHeader(info, info.Name())
-	if err != nil {
-		return nil, err
-	}
-
-	header.Name = target
-
-	log.Infof("Adding %s as %s...", info.Name(), header.Name)
-
-	if err := tarball.WriteHeader(header); err != nil {
-		return nil, err
-	}
-
-	fh, err := os.Open(source)
-	if err != nil {
-		return nil, err
-	}
-	defer fh.Close()
-	_, err = io.Copy(tarball, fh)
-
-	tarball.Close()
-
-	tr := tar.NewReader(&buf)
-	return tr, nil
-
-}
-
-func archiveFile(source string, target string, tarfile string) error {
-	tf, err := os.Create(tarfile)
-	if err != nil {
-		return err
-	}
-	defer tf.Close()
-
-	tarball := tar.NewWriter(tf)
-	defer tarball.Close()
-
-	info, err := os.Stat(source)
-	if err != nil {
-		return err
-	}
-
-	header, err := tar.FileInfoHeader(info, info.Name())
-	if err != nil {
-		return err
-	}
-
-	header.Name = target
-
-	log.Infof("Adding %s as %s...", info.Name(), header.Name)
-
-	if err := tarball.WriteHeader(header); err != nil {
-		return err
-	}
-
-	fh, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer fh.Close()
-	_, err = io.Copy(tarball, fh)
-
-	tarball.Close()
-
-	return nil
 }
 
 func CountLayersInImage(imageID string) (int, error) {
