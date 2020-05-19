@@ -868,27 +868,6 @@ func findFreePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-func FindNetworkByName(name string) (*docker.Network, error) {
-	dockerClient := DockerClient()
-	log.Debugf("Finding network by name %s", name)
-	filters := make(map[string]map[string]bool)
-	filter := make(map[string]bool)
-	filter[name] = true
-	filters["name"] = filter
-	networks, err := dockerClient.FilteredListNetworks(filters)
-
-	if err != nil {
-		return nil, fmt.Errorf("Can't filter networks by name %s: %v", name, err)
-	}
-
-	if len(networks) == 0 {
-		return nil, nil
-	}
-
-	network := networks[0]
-	return &network, nil
-}
-
 func CountLayersInImage(imageID string) (int, error) {
 	client := DockerClient()
 

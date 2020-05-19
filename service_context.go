@@ -19,7 +19,7 @@ func NewServiceContextWithId(ctxId string, workDir string) (*ServiceContext, err
 	dockerClient := DockerClient()
 	log.Infof("Creating service context '%s' in %s...", ctxId, workDir)
 
-	network, err := FindNetworkByName(ctxId)
+	network, err := findNetworkByName(ctxId)
 
 	if err != nil {
 		return nil, fmt.Errorf("Error trying to find existing network: %v", err)
@@ -48,6 +48,27 @@ func NewServiceContextWithId(ctxId string, workDir string) (*ServiceContext, err
 	}
 
 	return sc, nil
+}
+
+func findNetworkByName(name string) (*docker.Network, error) {
+	dockerClient := DockerClient()
+	log.Debugf("Finding network by name %s", name)
+	filters := make(map[string]map[string]bool)
+	filter := make(map[string]bool)
+	filter[name] = true
+	filters["name"] = filter
+	networks, err := dockerClient.FilteredListNetworks(filters)
+
+	if err != nil {
+		return nil, fmt.Errorf("Can't filter networks by name %s: %v", name, err)
+	}
+
+	if len(networks) == 0 {
+		return nil, nil
+	}
+
+	network := networks[0]
+	return &network, nil
 }
 
 func (sc *ServiceContext) FindContainer(cd ContainerDefinition) (*Container, error) {
