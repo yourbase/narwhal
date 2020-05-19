@@ -18,6 +18,7 @@ import (
 
 	docker "github.com/johnewart/go-dockerclient"
 	log "github.com/sirupsen/logrus"
+	"github.com/yourbase/narwhal/internal/xcontext"
 )
 
 var Client *docker.Client
@@ -977,17 +978,17 @@ func FindDockerImagesByTagPrefix(imageName string) ([]docker.APIImages, error) {
 // SquashImage takes a docker image with multiple layers and squashes it into
 // a single layer.  SquashImage takes advantage of the fact that docker
 // squashes layers into a single later when exported from a container
+// Note:  It can take minutes to export the container.  Please consider this
+// when setting context.Context.
 func SquashImage(ctx context.Context, repo, tag string) error {
 	client := DockerClient()
-	squashCtx, cancel := context.WithTimeout(context.Background(), time.Minute*30)
-	defer cancel()
 
 	squashImageId, err := imageId(repo, tag)
 	if err != nil {
 		return fmt.Errorf("SquashImage: %v", err)
 	}
 
-	tar, err := imageToTar(squashCtx, squashImageId)
+	tar, err := imageToTar(ctx, squashImageId)
 	if err != nil {
 		return fmt.Errorf("SquashImage: %v", err)
 	}
@@ -997,7 +998,7 @@ func SquashImage(ctx context.Context, repo, tag string) error {
 		Repository: repo,
 		Tag:        tag,
 		Source:     tar,
-		Context:    squashCtx,
+		Context:    ctx,
 	}); err != nil {
 		return fmt.Errorf("SquashImage: importing image error: %v", err)
 	}
@@ -1029,8 +1030,9 @@ func imageToTar(ctx context.Context, imageId string) (string, error) {
 	}
 	defer func() {
 		if err := client.RemoveContainer(docker.RemoveContainerOptions{
-			ID:      container.ID,
-			Context: ctx,
+			ID:            container.ID,
+			RemoveVolumes: true,
+			Context:       xcontext.Detach(ctx),
 		}); err != nil {
 			log.Infof("unable to remove container: %v", err)
 		}

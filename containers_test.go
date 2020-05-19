@@ -208,12 +208,15 @@ func TestSquashImage(t *testing.T) {
 	if client == nil {
 		t.Skip("Could not find Docker daemon connection")
 	}
+	const (
+		repo  = "yourbase-layer-test"
+		tag   = "v1"
+		image = repo + ":" + tag
+	)
 
-	repo := "yourbase-layer-test"
-	tag := "v1"
-	image := fmt.Sprintf("%s:%s", repo, tag)
-
-	buildLayeredImage(t, image)
+	if err := buildLayeredImage(image); err != nil {
+		t.Fatal(err)
+	}
 
 	err := PullImageIfNotHere(ContainerDefinition{
 		Image: image,
@@ -258,22 +261,26 @@ func TestSquashImage(t *testing.T) {
 	}
 }
 
-func buildLayeredImage(t *testing.T, imageName string) {
+func buildLayeredImage(imageName string) error {
 	client := DockerClient()
 
-	dockerFile := []byte("FROM alpine\nRUN apk add curl")
-	size := int64(len(dockerFile))
-	inputbuf, outputbuf := bytes.NewBuffer(nil), bytes.NewBuffer(nil)
-	tw := tar.NewWriter(inputbuf)
-	tw.WriteHeader(&tar.Header{Name: "Dockerfile", Size: size})
-	tw.Write(dockerFile)
-	tw.Close()
+	const dockerFile = "FROM alpine\nRUN apk add curl"
+	content := strings.NewReader(dockerFile)
+	inputbuf, outputbuf := new(bytes.Buffer), new(bytes.Buffer)
+	header := new(tar.Header)
+	header.Name = "Dockerfile"
+	header.Size = int64(len(dockerFile))
+	if err := archiveFile(inputbuf, content, header); err != nil {
+		return fmt.Errorf("upload file to container: %w", err)
+	}
 	opts := docker.BuildImageOptions{
 		Name:         imageName,
 		InputStream:  inputbuf,
 		OutputStream: outputbuf,
 	}
 	if err := client.BuildImage(opts); err != nil {
-		t.Fatalf("failed to build layered image: %v", err)
+		return fmt.Errorf("failed to build layered image: %v", err)
 	}
+
+	return nil
 }
