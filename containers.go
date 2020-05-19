@@ -129,7 +129,6 @@ func (c *ContainerDefinition) containerName() string {
 type Container struct {
 	Id         string
 	Name       string
-	IPv4       string
 	Definition ContainerDefinition
 }
 
