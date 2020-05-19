@@ -2,12 +2,9 @@ package narwhal
 
 import (
 	"fmt"
-	"path/filepath"
 
 	docker "github.com/johnewart/go-dockerclient"
 	log "github.com/sirupsen/logrus"
-
-	"github.com/nu7hatch/gouuid"
 )
 
 type ServiceContext struct {
@@ -15,7 +12,6 @@ type ServiceContext struct {
 	Id                   string
 	ContainerDefinitions []ContainerDefinition
 	NetworkId            string
-	Containers           map[string]*Container
 	WorkDir              string
 }
 
@@ -49,25 +45,9 @@ func NewServiceContextWithId(ctxId string, workDir string) (*ServiceContext, err
 		ContainerDefinitions: make([]ContainerDefinition, 0),
 		NetworkId:            network.ID,
 		WorkDir:              workDir,
-		Containers:           make(map[string]*Container),
 	}
 
 	return sc, nil
-}
-
-func NewServiceContext(workDir string) (*ServiceContext, error) {
-	ctxId, _ := uuid.NewV4()
-	return NewServiceContextWithId(ctxId.String(), workDir)
-}
-
-func (sc *ServiceContext) GetContainerByLabel(label string) *Container {
-	for containerLabel, c := range sc.Containers {
-		if label == containerLabel {
-			return c
-		}
-	}
-
-	return nil
 }
 
 func (sc *ServiceContext) FindContainer(cd ContainerDefinition) (*Container, error) {
@@ -196,64 +176,11 @@ func (sc *ServiceContext) startContainer(cd ContainerDefinition) (*Container, er
 	if cd.PortWaitCheck.Port != 0 {
 		check := cd.PortWaitCheck
 		log.Infof("Waiting up to %ds for %s to be ready... ", check.Timeout, cd.Label)
-		if err := container.WaitForTcpPort(check.Port, check.Timeout); err != nil {
+		if err := container.waitForTCPPort(check.Port, check.Timeout); err != nil {
 			log.Warnf("Timed out!")
 			return container, fmt.Errorf("Timeout occured waiting for container '%s' to be ready", cd.Label)
 		}
 	}
 
-	// Add to list of build containers
-	sc.Containers[cd.Label] = container
 	return container, nil
-}
-
-func (sc *ServiceContext) StandUp() error {
-	log.Infof("Starting up containers and network...")
-
-	// TODO: Move away from this dict and just have people use an array
-	for _, c := range sc.ContainerDefinitions {
-		_, err := sc.StartContainer(c)
-		if err != nil {
-			return fmt.Errorf("Problem standing up containers: %v", err)
-		}
-	}
-
-	return nil
-}
-
-func (sc *ServiceContext) StreamContainerLogs() error {
-	hostWorkDir := sc.WorkDir
-	MkdirAsNeeded(hostWorkDir)
-	logDir := filepath.Join(hostWorkDir, "logs")
-	MkdirAsNeeded(logDir)
-
-	/*//TODO: stream logs from each dependency to the build dir
-	containerLogFile := filepath.Join(logDir, fmt.Sprintf("%s.log", imageName))
-	Name:
-	f, err := os.Create(containerLogFile)
-
-	if err != nil {
-		log.Infof("Unable to write to log file %s: %v", containerLogFile, err)
-		return err
-	}
-
-	out, err := dockerClient.ContainerLogs(ctx, dependencyContainer.ID, types.ContainerLogsOptions{
-		ShowStderr: true,
-		ShowStdout: true,
-		Timestamps: false,
-		Follow:     true,
-		Tail:       "40",
-	})
-	if err != nil {
-		log.Infof("Can't get log handle for container %s: %v", dependencyContainer.ID, err)
-		return err
-	}
-	go func() {
-		for {
-			io.Copy(f, out)
-			time.Sleep(300 * time.Millisecond)
-		}
-	}()
-	*/
-	return nil
 }

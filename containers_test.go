@@ -3,6 +3,8 @@ package narwhal
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -43,34 +45,29 @@ func TestSanitizeContainerName(t *testing.T) {
 }
 
 func TestNewServiceContext(t *testing.T) {
-	containers := []ContainerDefinition{
-		ContainerDefinition{
-			Image: "redis:latest",
-			Label: "redis",
-			PortWaitCheck: PortWaitCheck{
-				Port:    6379,
-				Timeout: 30,
-			},
+	cd := ContainerDefinition{
+		Image: "redis:latest",
+		Label: "redis",
+		PortWaitCheck: PortWaitCheck{
+			Port:    6379,
+			Timeout: 30,
 		},
 	}
 
-	sc, err := NewServiceContext("testapp-default")
+	ctxId, err := randomContextID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := NewServiceContextWithId(ctxId, "testapp-default")
 	if err != nil {
 		t.Fatalf("Error creating context: %v", err)
 	}
 
 	defer sc.TearDown()
 
-	for _, c := range containers {
-		_, err := sc.StartContainer(c)
-		if err != nil {
-			t.Fatalf("Error standing up container: %v", err)
-		}
-	}
-
-	c := sc.GetContainerByLabel("redis")
-	if c == nil {
-		t.Fatalf("Error getting redis by label...")
+	c, err := sc.StartContainer(cd)
+	if err != nil {
+		t.Fatalf("Error standing up container: %v", err)
 	}
 
 	running, err := c.IsRunning()
@@ -87,37 +84,31 @@ func TestNewServiceContext(t *testing.T) {
 		t.Fatalf("Couldn't get IP for redis container: %v", err)
 	}
 
-	fmt.Printf("IP address: %s\n", ip)
+	t.Log("IP address:", ip)
 }
 
 func TestNewServiceContextWithContainerTimeout(t *testing.T) {
-	containers := []ContainerDefinition{
-		ContainerDefinition{
-			Image:   "alpine:latest",
-			Label:   "test",
-			Command: "tail -f /dev/null",
-			PortWaitCheck: PortWaitCheck{
-				Port:    8080,
-				Timeout: 5,
-			},
+	cd := ContainerDefinition{
+		Image:   "alpine:latest",
+		Label:   "test",
+		Command: "tail -f /dev/null",
+		PortWaitCheck: PortWaitCheck{
+			Port:    8080,
+			Timeout: 5,
 		},
 	}
 
-	sc, err := NewServiceContext("testapp-default")
+	ctxId, err := randomContextID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := NewServiceContextWithId(ctxId, "testapp-default")
 	if err != nil {
 		t.Fatalf("Error creating context: %v", err)
 	}
 
-	for _, c := range containers {
-		_, err := sc.StartContainer(c)
-		if err != nil {
-			fmt.Printf("Expected timeout standing up container: %v\n", err)
-		}
-	}
-
-	c := sc.GetContainerByLabel("test")
-	if c != nil {
-		t.Fatalf("test container should not exist")
+	if _, err := sc.StartContainer(cd); err != nil {
+		fmt.Printf("Expected timeout standing up container: %v\n", err)
 	}
 
 	err = sc.TearDown()
@@ -200,4 +191,12 @@ func TestUpload(t *testing.T) {
 	if !found {
 		t.Errorf("%s not found", path)
 	}
+}
+
+func randomContextID() (string, error) {
+	var buf [32]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf[:]), nil
 }
