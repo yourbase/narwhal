@@ -13,27 +13,36 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	docker "github.com/johnewart/go-dockerclient"
 	log "github.com/sirupsen/logrus"
 )
 
-var Client *docker.Client
+var client struct {
+	init sync.Once
+	*docker.Client
+}
 
+// DockerClient returns a globally initialized Docker client.
+//
+// Deprecated: Construct your own client.
 func DockerClient() *docker.Client {
-	if Client == nil {
-
-		// TODO: Do something smarter...
-		endpoint := "unix:///var/run/docker.sock"
-		client, err := docker.NewVersionedClient(endpoint, "1.39")
-		if err != nil {
-			return nil
-		}
-		Client = client
+	var err error
+	client.init.Do(func() {
+		client.Client, err = docker.NewVersionedClient("unix:///var/run/docker.sock", "1.39")
+	})
+	if err != nil {
+		// Errors from NewVersionedClient are for malformed arguments.
+		// Even if the socket doesn't exist, it still returns a new client.
+		panic(err)
 	}
-	return Client
-
+	if client.Client == nil {
+		// For subsequent panics (which should not happen in general).
+		panic("docker client did not initialize")
+	}
+	return client.Client
 }
 
 type PortWaitCheck struct {
