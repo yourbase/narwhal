@@ -1007,7 +1007,7 @@ func SquashImage(ctx context.Context, repo, tag string) error {
 	if err := client.RemoveImageExtended(
 		squashImageId,
 		docker.RemoveImageOptions{Force: true}); err != nil {
-		log.Infof("SquashAndRemoveImage: failed to remove image (%s:%s): %v", repo, tag, err)
+		log.Infof("SquashAndRemoveImage: failed to remove image (%s): %v", squashImageId, err)
 	}
 
 	return nil
