@@ -172,7 +172,7 @@ func (sc *ServiceContext) startContainer(cd ContainerDefinition) (*Container, er
 
 	}
 
-	running, err := container.IsRunning()
+	running, err := container.isRunning()
 	if err != nil {
 		return container, fmt.Errorf("Couldn't determine if container is running: %v", err)
 	}

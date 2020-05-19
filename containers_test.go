@@ -70,7 +70,7 @@ func TestNewServiceContext(t *testing.T) {
 		t.Fatalf("Error standing up container: %v", err)
 	}
 
-	running, err := c.IsRunning()
+	running, err := c.isRunning()
 	if err != nil {
 		t.Fatalf("Couldn't determine if container was running: %v", err)
 	}

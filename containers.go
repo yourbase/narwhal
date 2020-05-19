@@ -380,7 +380,7 @@ func (b Container) IPv4Address() (string, error) {
 	return ipv4, nil
 }
 
-func (b Container) IsRunning() (bool, error) {
+func (b Container) isRunning() (bool, error) {
 	client := DockerClient()
 	c, err := client.InspectContainer(b.Id)
 	if err != nil {
@@ -399,7 +399,7 @@ func (b Container) Stop(timeout uint) error {
 func (b Container) Start() error {
 	client := DockerClient()
 
-	if running, err := b.IsRunning(); err != nil {
+	if running, err := b.isRunning(); err != nil {
 		return fmt.Errorf("Couldn't determine if container %s is running: %v", b.Id, err)
 	} else {
 		if running {
