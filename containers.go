@@ -320,46 +320,6 @@ func (b Container) Destroy() error {
 	return RemoveContainerAndVolumesById(b.Id)
 }
 
-func (b Container) ListNetworkIDs() ([]string, error) {
-	client := DockerClient()
-	c, err := client.InspectContainer(b.Id)
-
-	networkIds := make([]string, 0)
-
-	if err != nil {
-		return networkIds, fmt.Errorf("Couldn't get networks for container %s: %v", b.Id, err)
-	}
-
-	for _, network := range c.NetworkSettings.Networks {
-		networkIds = append(networkIds, network.NetworkID)
-	}
-	return networkIds, nil
-}
-
-func (b Container) DisconnectFromNetworks() error {
-
-	dockerClient := DockerClient()
-	if networkIds, err := b.ListNetworkIDs(); err != nil {
-		return fmt.Errorf("Can't get listing of networks: %v", err)
-	} else {
-		for _, networkId := range networkIds {
-			opts := docker.NetworkConnectionOptions{
-				Container: b.Id,
-				EndpointConfig: &docker.EndpointConfig{
-					NetworkID: networkId,
-				},
-				Force: true,
-			}
-
-			if err := dockerClient.DisconnectNetwork(networkId, opts); err != nil {
-				log.Warnf("Couldn't disconnect container %s from network %s: %v", b.Id, networkId, err)
-			}
-		}
-	}
-
-	return nil
-}
-
 func (b Container) waitForTCPPort(port int, timeout int) error {
 
 	var hostPort string
