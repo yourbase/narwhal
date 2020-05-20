@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	docker "github.com/johnewart/go-dockerclient"
@@ -21,24 +22,30 @@ import (
 	"github.com/yourbase/narwhal/internal/xcontext"
 )
 
-var Client *docker.Client
-
-func DockerClient() *docker.Client {
-	if Client == nil {
-
-		// TODO: Do something smarter...
-		endpoint := "unix:///var/run/docker.sock"
-		client, err := docker.NewVersionedClient(endpoint, "1.39")
-		if err != nil {
-			return nil
-		}
-		Client = client
-	}
-	return Client
-
+var client struct {
+	init sync.Once
+	*docker.Client
 }
 
-const DEFAULT_YB_CONTAINER = "yourbase/yb_ubuntu:18.04"
+// DockerClient returns a globally initialized Docker client.
+//
+// Deprecated: Construct your own client.
+func DockerClient() *docker.Client {
+	var err error
+	client.init.Do(func() {
+		client.Client, err = docker.NewVersionedClient("unix:///var/run/docker.sock", "1.39")
+	})
+	if err != nil {
+		// Errors from NewVersionedClient are for malformed arguments.
+		// Even if the socket doesn't exist, it still returns a new client.
+		panic(err)
+	}
+	if client.Client == nil {
+		// For subsequent panics (which should not happen in general).
+		panic("docker client did not initialize")
+	}
+	return client.Client
+}
 
 type PortWaitCheck struct {
 	Port         int `yaml:"port"`
@@ -73,11 +80,8 @@ func (c *ContainerDefinition) DockerMounts() ([]docker.HostMount, error) {
 				src = filepath.Join(c.LocalWorkDir, src)
 			}
 			// TODO do the same for dst?
-			if !DirectoryExists(src) {
-				log.Infof("Requested local mount dir %s doesn't exist, will create", src)
-				if err := MkdirAsNeeded(src); err != nil {
-					return []docker.HostMount{}, fmt.Errorf("Couldn't make source dir %s: %v", src, err)
-				}
+			if err := os.MkdirAll(src, 0777); err != nil {
+				return []docker.HostMount{}, fmt.Errorf("Couldn't make source dir %s: %v", src, err)
 			}
 			mounts = append(mounts, docker.HostMount{Source: src, Target: dst, Type: "bind"})
 		} else {
@@ -127,7 +131,6 @@ func (c *ContainerDefinition) containerName() string {
 type Container struct {
 	Id         string
 	Name       string
-	IPv4       string
 	Definition ContainerDefinition
 }
 
@@ -218,13 +221,6 @@ func StopContainerById(id string, timeout uint) error {
 	return client.StopContainer(id, timeout)
 }
 
-func RemoveContainerById(id string) error {
-	client := DockerClient()
-	return client.RemoveContainer(docker.RemoveContainerOptions{
-		ID: id,
-	})
-}
-
 func RemoveContainerAndVolumesById(id string) error {
 	client := DockerClient()
 	return client.RemoveContainer(docker.RemoveContainerOptions{
@@ -308,7 +304,7 @@ func BuildImageWithArchive(cd ContainerDefinition, repository, tag, localFile, f
 		}
 	}()
 
-	err = container.UploadArchive(localFile, remotePath)
+	err = container.uploadArchive(localFile, remotePath)
 	if err != nil {
 		return fmt.Errorf("Error uploading file: %v", err)
 	}
@@ -325,64 +321,7 @@ func (b Container) Destroy() error {
 	return RemoveContainerAndVolumesById(b.Id)
 }
 
-func (b Container) ListNetworkIDs() ([]string, error) {
-	client := DockerClient()
-	c, err := client.InspectContainer(b.Id)
-
-	networkIds := make([]string, 0)
-
-	if err != nil {
-		return networkIds, fmt.Errorf("Couldn't get networks for container %s: %v", b.Id, err)
-	}
-
-	for _, network := range c.NetworkSettings.Networks {
-		networkIds = append(networkIds, network.NetworkID)
-	}
-	return networkIds, nil
-}
-
-func (b Container) DisconnectFromNetworks() error {
-
-	dockerClient := DockerClient()
-	if networkIds, err := b.ListNetworkIDs(); err != nil {
-		return fmt.Errorf("Can't get listing of networks: %v", err)
-	} else {
-		for _, networkId := range networkIds {
-			opts := docker.NetworkConnectionOptions{
-				Container: b.Id,
-				EndpointConfig: &docker.EndpointConfig{
-					NetworkID: networkId,
-				},
-				Force: true,
-			}
-
-			if err := dockerClient.DisconnectNetwork(networkId, opts); err != nil {
-				log.Warnf("Couldn't disconnect container %s from network %s: %v", b.Id, networkId, err)
-			}
-		}
-	}
-
-	return nil
-}
-
-func (b Container) EnsureRunning(uptime int) error {
-
-	sleepTime := time.Duration(uptime) * time.Second
-	time.Sleep(sleepTime)
-
-	running, err := b.IsRunning()
-	if err != nil {
-		return fmt.Errorf("Couldn't wait for running state: %v", err)
-	}
-
-	if !running {
-		return fmt.Errorf("Container stopped running before %d seconds", uptime)
-	}
-
-	return nil
-}
-
-func (b Container) WaitForTcpPort(port int, timeout int) error {
+func (b Container) waitForTCPPort(port int, timeout int) error {
 
 	var hostPort string
 
@@ -442,7 +381,7 @@ func (b Container) IPv4Address() (string, error) {
 	return ipv4, nil
 }
 
-func (b Container) IsRunning() (bool, error) {
+func (b Container) isRunning() (bool, error) {
 	client := DockerClient()
 	c, err := client.InspectContainer(b.Id)
 	if err != nil {
@@ -461,7 +400,7 @@ func (b Container) Stop(timeout uint) error {
 func (b Container) Start() error {
 	client := DockerClient()
 
-	if running, err := b.IsRunning(); err != nil {
+	if running, err := b.isRunning(); err != nil {
 		return fmt.Errorf("Couldn't determine if container %s is running: %v", b.Id, err)
 	} else {
 		if running {
@@ -490,43 +429,8 @@ func (b Container) DownloadDirectoryToWriter(remotePath string, sink io.Writer) 
 	return nil
 }
 
-func (b Container) DownloadDirectoryToFile(remotePath string, localFile string) error {
-	outputFile, err := os.OpenFile(localFile, os.O_CREATE|os.O_RDWR, 0660)
-	if err != nil {
-		return fmt.Errorf("Can't create local file: %s: %v", localFile, err)
-	}
-
-	defer outputFile.Close()
-
-	log.Infof("Downloading %s to %s...", remotePath, localFile)
-
-	return b.DownloadDirectoryToWriter(remotePath, outputFile)
-}
-
-func (b Container) DownloadDirectory(remotePath string) (string, error) {
-
-	dir, err := ioutil.TempDir("", "yb-container-download")
-
-	if err != nil {
-		return "", fmt.Errorf("Can't create temporary download location: %s: %v", dir, err)
-	}
-
-	fileParts := strings.Split(remotePath, "/")
-	filename := fileParts[len(fileParts)-1]
-	outfileName := fmt.Sprintf("%s.tar", filename)
-	outfilePath := filepath.Join(dir, outfileName)
-
-	err = b.DownloadDirectoryToFile(remotePath, outfilePath)
-
-	if err != nil {
-		return "", err
-	}
-
-	return outfilePath, nil
-}
-
-// UploadStream extracts a tar archive in the given container directory.
-func (b Container) UploadStream(source io.Reader, remotePath string) error {
+// uploadStream extracts a tar archive in the given container directory.
+func (b Container) uploadStream(source io.Reader, remotePath string) error {
 	return DockerClient().UploadToContainer(b.Id, docker.UploadToContainerOptions{
 		InputStream:          source,
 		Path:                 remotePath,
@@ -534,15 +438,15 @@ func (b Container) UploadStream(source io.Reader, remotePath string) error {
 	})
 }
 
-// UploadArchive extracts the tar archive at the given local path into the given
+// uploadArchive extracts the tar archive at the given local path into the given
 // container directory.
-func (b Container) UploadArchive(localFile string, remotePath string) error {
+func (b Container) uploadArchive(localFile string, remotePath string) error {
 	file, err := os.Open(localFile)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	return b.UploadStream(file, remotePath)
+	return b.uploadStream(file, remotePath)
 }
 
 // UploadFile sends the content of localFile (a host filesystem path) into
@@ -589,7 +493,7 @@ func (b Container) Upload(remotePath string, content io.Reader, header *tar.Head
 	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("upload file to container: %w", err)
 	}
-	if err := b.UploadStream(tmpFile, remoteDir); err != nil {
+	if err := b.uploadStream(tmpFile, remoteDir); err != nil {
 		return fmt.Errorf("upload file to container: %w", err)
 	}
 	return nil
@@ -798,7 +702,7 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 	client := DockerClient()
 
 	if containerDef.Image == "" {
-		containerDef.Image = DEFAULT_YB_CONTAINER
+		containerDef.Image = "yourbase/yb_ubuntu:18.04"
 	}
 
 	containerName := containerDef.containerName()
@@ -850,7 +754,7 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 		// Port wait check, need to map to localhost port if we're on Darwin (VM networking...)
 		if runtime.GOOS == "darwin" {
 			log.Infof("Port wait check on port %d; finding free local port...", checkPort)
-			localPort, err := GetFreePort()
+			localPort, err := findFreePort()
 			if err != nil {
 				log.Errorf("Couldn't find free TCP port to forward from: %v", err)
 				return Container{}, err
@@ -861,7 +765,7 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 			pkey := docker.Port(pstr)
 			localPortString := fmt.Sprintf("%d", localPort)
 			pb := []docker.PortBinding{
-				docker.PortBinding{HostIP: "127.0.0.1", HostPort: localPortString},
+				{HostIP: "127.0.0.1", HostPort: localPortString},
 			}
 			bindings[pkey] = pb
 			var s struct{}
@@ -912,25 +816,17 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 	}, nil
 }
 
-func FindNetworkByName(name string) (*docker.Network, error) {
-	dockerClient := DockerClient()
-	log.Debugf("Finding network by name %s", name)
-	filters := make(map[string]map[string]bool)
-	filter := make(map[string]bool)
-	filter[name] = true
-	filters["name"] = filter
-	networks, err := dockerClient.FilteredListNetworks(filters)
-
+func findFreePort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
 	if err != nil {
-		return nil, fmt.Errorf("Can't filter networks by name %s: %v", name, err)
+		return 0, err
 	}
-
-	if len(networks) == 0 {
-		return nil, nil
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, err
 	}
-
-	network := networks[0]
-	return &network, nil
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
 func CountLayersInImage(imageID string) (int, error) {
