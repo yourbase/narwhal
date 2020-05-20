@@ -1005,11 +1005,14 @@ func SquashImage(ctx context.Context, repo, tag string) error {
 
 	log.Infof("Squashed image: %s:%s", repo, tag)
 
-	if err := client.RemoveImageExtended(
+	err = client.RemoveImageExtended(
 		squashImageId,
-		docker.RemoveImageOptions{Force: true}); err != nil {
-		log.Infof("SquashImage: failed to remove image (%s): %v", squashImageId, err)
+		docker.RemoveImageOptions{Force: true})
+	if err != nil {
+		log.Infof("SquashImage: failed to remove image: (%s): %v", squashImageId, err)
+		return err
 	}
+	log.Debugf("SquashImage: removed max layer image (%s)", squashImageId)
 
 	return nil
 }
@@ -1028,6 +1031,7 @@ func imageToTar(ctx context.Context, imageId string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create container error: %v", err)
 	}
+	log.Debugf("imageToTar: created container (%s) from imageId (%s)", containerName, imageId)
 	defer func() {
 		if err := client.RemoveContainer(docker.RemoveContainerOptions{
 			ID:            container.ID,
