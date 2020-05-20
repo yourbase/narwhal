@@ -1,7 +1,11 @@
+// Package narwhal provides functions for high-level operations on Docker containers.
 package narwhal
 
 import (
 	"archive/tar"
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -14,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	docker "github.com/johnewart/go-dockerclient"
 	log "github.com/sirupsen/logrus"
@@ -65,6 +68,13 @@ type ContainerDefinition struct {
 	ExecGroupId   string
 	Namespace     string
 	LocalWorkDir  string
+}
+
+// clone returns a shallow clone of c.
+func (c *ContainerDefinition) clone() *ContainerDefinition {
+	c2 := new(ContainerDefinition)
+	*c2 = *c
+	return c2
 }
 
 func (c *ContainerDefinition) DockerMounts() ([]docker.HostMount, error) {
@@ -152,90 +162,94 @@ func sanitizeContainerName(proposed string) string {
 	return result
 }
 
-// TODO: make sure the opts match the existing container
-func FindContainer(cd ContainerDefinition) (*Container, error) {
+// FindContainer searches for a container that matches the definition. If the
+// container is not found, it returns an error for which IsContainerNotFound
+// returns true.
+func FindContainer(ctx context.Context, client *docker.Client, cd *ContainerDefinition) (*Container, error) {
+	// TODO: make sure the opts match the existing container
 
 	containerName := cd.containerName()
 
-	client := DockerClient()
 	log.Debugf("Looking for container: %s", containerName)
 
-	filters := make(map[string][]string)
-	filters["name"] = append(filters["name"], containerName)
-
 	result, err := client.ListContainers(docker.ListContainersOptions{
-		Filters: filters,
-		All:     true,
+		Context: ctx,
+		Filters: map[string][]string{
+			"name": {containerName},
+		},
+		All: true,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("find container %q: %w", containerName, err)
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("find container %q: %w", containerName, errNotFound)
+	}
 
-	if err == nil && len(result) > 0 {
-		for _, c := range result {
-			log.Debugf("ID: %s -- NAME: %s", c.ID, c.Names)
-		}
-		c := result[0]
-		log.Debugf("Found container %s with ID %s", containerName, c.ID)
-		container, err := client.InspectContainer(c.ID)
-		if err != nil {
-			return nil, err
-		} else {
-			// Darwin -- lookup the mapping and use that
-			if runtime.GOOS == "darwin" {
-				portCheckPort := cd.PortWaitCheck.Port
-				if portCheckPort != 0 {
-					portBindings := container.NetworkSettings.Ports
-					for k, v := range portBindings {
-
-						parts := strings.Split(string(k), "/")
-						if len(parts) == 2 {
-							port, _ := strconv.Atoi(parts[0])
-							if port == portCheckPort {
-								if len(v) == 1 {
-									localPort, _ := strconv.Atoi(v[0].HostPort)
-									cd.PortWaitCheck.LocalPortMap = localPort
-									log.Infof("Will use 127.0.0.1:%d for port check", localPort)
-								}
-							}
+	for _, c := range result {
+		log.Debugf("ID: %s -- NAME: %s", c.ID, c.Names)
+	}
+	c := result[0]
+	log.Debugf("Found container %s with ID %s", containerName, c.ID)
+	container, err := client.InspectContainer(c.ID)
+	if err != nil {
+		return nil, err
+	}
+	// Darwin -- lookup the mapping and use that
+	if runtime.GOOS == "darwin" {
+		portCheckPort := cd.PortWaitCheck.Port
+		if portCheckPort != 0 {
+			portBindings := container.NetworkSettings.Ports
+			for k, v := range portBindings {
+				parts := strings.Split(string(k), "/")
+				if len(parts) == 2 {
+					port, _ := strconv.Atoi(parts[0])
+					if port == portCheckPort {
+						if len(v) == 1 {
+							localPort, _ := strconv.Atoi(v[0].HostPort)
+							cd = cd.clone()
+							cd.PortWaitCheck.LocalPortMap = localPort
+							log.Infof("Will use 127.0.0.1:%d for port check", localPort)
 						}
 					}
 				}
 			}
-
-			bc := Container{
-				Id:         c.ID,
-				Name:       containerName,
-				Definition: cd,
-			}
-			return &bc, nil
 		}
-	} else {
-		return nil, err
 	}
 
+	return &Container{
+		Id:         c.ID,
+		Name:       containerName,
+		Definition: *cd,
+	}, nil
 }
 
-func StopContainerById(id string, timeout uint) error {
-	client := DockerClient()
-	log.Debugf("Stopping container %s with a %d second timeout...", id, timeout)
-	return client.StopContainer(id, timeout)
+var errNotFound = errors.New("container not found")
+
+// IsContainerNotFound reports whether the error indicates the container wasn't found.
+func IsContainerNotFound(e error) bool {
+	return errors.Is(e, errNotFound)
 }
 
-func RemoveContainerAndVolumesById(id string) error {
-	client := DockerClient()
+// RemoveContainerAndVolumes removes the given container and any associated volumes.
+func RemoveContainerAndVolumes(ctx context.Context, client *docker.Client, containerID string) error {
 	return client.RemoveContainer(docker.RemoveContainerOptions{
-		ID:            id,
+		Context:       ctx,
+		ID:            containerID,
 		RemoveVolumes: true,
 	})
 }
 
-func PullImage(c ContainerDefinition) error {
-	client := DockerClient()
+// PullImage unconditionally pulls the image for the given container definition.
+func PullImage(ctx context.Context, client *docker.Client, output io.Writer, c *ContainerDefinition) error {
 	imageName := c.ImageName()
 	imageTag := c.ImageTag()
 
 	pullOpts := docker.PullImageOptions{
+		Context:      ctx,
 		Repository:   imageName,
 		Tag:          imageTag,
-		OutputStream: os.Stdout,
+		OutputStream: output,
 	}
 
 	authConfig := docker.AuthConfiguration{}
@@ -247,211 +261,113 @@ func PullImage(c ContainerDefinition) error {
 	return nil
 }
 
-func PullImageIfNotHere(c ContainerDefinition) error {
-	client := DockerClient()
-	filters := make(map[string][]string)
-
+// PullImageIfNotHere pulls the image for the given container definition if it
+// is not present in the Docker daemon's storage.
+func PullImageIfNotHere(ctx context.Context, client *docker.Client, output io.Writer, c *ContainerDefinition) error {
 	imageLabel := c.ImageNameWithTag()
 	log.Debugf("Pulling %s if needed...", imageLabel)
 
-	opts := docker.ListImagesOptions{
-		Filters: filters,
-	}
-
-	imgs, err := client.ListImages(opts)
+	imgs, err := client.ListImages(docker.ListImagesOptions{
+		Context: ctx,
+	})
 	if err != nil {
 		return fmt.Errorf("Error getting image list: %v", err)
 	}
 
-	foundImage := false
-	if len(imgs) > 0 {
-		for _, img := range imgs {
-			for _, tag := range img.RepoTags {
-				if tag == imageLabel {
-					log.Debugf("Found image: %s with tags: %s", img.ID, strings.Join(img.RepoTags, ","))
-					foundImage = true
-				}
+	for _, img := range imgs {
+		for _, tag := range img.RepoTags {
+			if tag == imageLabel {
+				log.Debugf("Found image: %s with tags: %s", img.ID, strings.Join(img.RepoTags, ","))
+				return nil
 			}
 		}
 	}
 
-	if !foundImage {
-		log.Infof("Image %s not found, pulling", imageLabel)
-		return PullImage(c)
-	}
-
-	return nil
-
+	log.Infof("Image %s not found, pulling", imageLabel)
+	return PullImage(ctx, client, output, c)
 }
 
-func BuildImageWithArchive(cd ContainerDefinition, repository, tag, localFile, fileName, remotePath string) error {
+func BuildImageWithArchive(ctx context.Context, client *docker.Client, pullOutput io.Writer, cd *ContainerDefinition, repository, tag, localFile, remotePath string) error {
 
-	err := PullImageIfNotHere(cd)
+	err := PullImageIfNotHere(ctx, client, pullOutput, cd)
 	if err != nil {
 		return fmt.Errorf("Error pulling image (%s): %v", cd.Image, err)
 	}
 
-	container, err := newContainer(cd)
+	container, err := newContainer(ctx, client, pullOutput, cd)
 	if err != nil {
 		return fmt.Errorf("Error creating container: %v", err)
 	}
 	defer func() {
-		err := container.Destroy()
-		if err != nil {
+		if err := RemoveContainerAndVolumes(ctx, client, container.Id); err != nil {
 			log.Errorf("Unable to destroy temporary container: %v", err)
 		}
 	}()
 
-	err = container.uploadArchive(localFile, remotePath)
+	err = uploadArchive(ctx, client, container.Id, localFile, remotePath)
 	if err != nil {
 		return fmt.Errorf("Error uploading file: %v", err)
 	}
 
-	_, err = container.CommitImage(repository, tag)
+	_, err = client.CommitContainer(docker.CommitContainerOptions{
+		Context:    ctx,
+		Container:  container.Id,
+		Repository: repository,
+		Tag:        tag,
+	})
 	if err != nil {
 		return fmt.Errorf("Error committing image: %v", err)
 	}
-
 	return nil
-}
-
-func (b Container) Destroy() error {
-	return RemoveContainerAndVolumesById(b.Id)
-}
-
-func (b Container) waitForTCPPort(port int, timeout int) error {
-
-	var hostPort string
-
-	if b.Definition.PortWaitCheck.LocalPortMap != 0 {
-		hostPort = fmt.Sprintf("127.0.0.1:%d", b.Definition.PortWaitCheck.LocalPortMap)
-	} else {
-		address, err := b.IPv4Address()
-		if err != nil {
-			return fmt.Errorf("Couldn't wait for TCP port %d: %v", port, err)
-		}
-
-		hostPort = fmt.Sprintf("%s:%d", address, port)
-	}
-
-	timeWaited := 0
-	secondsToSleep := 1
-	sleepTime := time.Duration(secondsToSleep) * time.Second
-	dialTimeout := 1 * time.Second
-
-	c1 := make(chan error, 1)
-	go func() {
-		for timeWaited < timeout {
-			conn, err := net.DialTimeout("tcp", hostPort, dialTimeout)
-			if err != nil {
-				// Pass for now
-				timeWaited = timeWaited + secondsToSleep
-				time.Sleep(sleepTime)
-			} else {
-				conn.Close()
-				c1 <- nil
-			}
-		}
-
-	}()
-
-	select {
-	case res := <-c1:
-		if res == nil {
-			return nil
-		}
-	case <-time.After(time.Duration(timeout) * time.Second):
-		log.Warnf("Timed out waiting for service")
-	}
-
-	return fmt.Errorf("Couldn't connect to service before specified timeout (%d sec.)", timeout)
-}
-
-func (b Container) IPv4Address() (string, error) {
-	client := DockerClient()
-	c, err := client.InspectContainer(b.Id)
-
-	if err != nil {
-		return "", fmt.Errorf("Couldn't determine IP of container %s: %v", b.Id, err)
-	}
-
-	ipv4 := c.NetworkSettings.IPAddress
-	return ipv4, nil
-}
-
-func (b Container) isRunning() (bool, error) {
-	client := DockerClient()
-	c, err := client.InspectContainer(b.Id)
-	if err != nil {
-		return false, fmt.Errorf("Couldn't determine state of container %s: %v", b.Id, err)
-	}
-
-	return c.State.Running, nil
-}
-
-func (b Container) Stop(timeout uint) error {
-	client := DockerClient()
-	log.Debugf("Stopping container %s with a %d timeout...", b.Id, timeout)
-	return client.StopContainer(b.Id, timeout)
-}
-
-func (b Container) Start() error {
-	client := DockerClient()
-
-	if running, err := b.isRunning(); err != nil {
-		return fmt.Errorf("Couldn't determine if container %s is running: %v", b.Id, err)
-	} else {
-		if running {
-			// Nothing to do
-			return nil
-		}
-	}
-
-	hostConfig := &docker.HostConfig{}
-
-	return client.StartContainer(b.Id, hostConfig)
-}
-
-func (b Container) DownloadDirectoryToWriter(remotePath string, sink io.Writer) error {
-	client := DockerClient()
-	downloadOpts := docker.DownloadFromContainerOptions{
-		OutputStream: sink,
-		Path:         remotePath,
-	}
-
-	err := client.DownloadFromContainer(b.Id, downloadOpts)
-	if err != nil {
-		return fmt.Errorf("Unable to download %s: %v", remotePath, err)
-	}
-
-	return nil
-}
-
-// uploadStream extracts a tar archive in the given container directory.
-func (b Container) uploadStream(source io.Reader, remotePath string) error {
-	return DockerClient().UploadToContainer(b.Id, docker.UploadToContainerOptions{
-		InputStream:          source,
-		Path:                 remotePath,
-		NoOverwriteDirNonDir: true,
-	})
 }
 
 // uploadArchive extracts the tar archive at the given local path into the given
 // container directory.
-func (b Container) uploadArchive(localFile string, remotePath string) error {
+func uploadArchive(ctx context.Context, client *docker.Client, containerID string, localFile string, remotePath string) error {
 	file, err := os.Open(localFile)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	return b.uploadStream(file, remotePath)
+	return client.UploadToContainer(containerID, docker.UploadToContainerOptions{
+		Context:              ctx,
+		InputStream:          file,
+		Path:                 remotePath,
+		NoOverwriteDirNonDir: true,
+	})
+}
+
+// IPv4Address finds the IP address of a running container.
+func IPv4Address(ctx context.Context, client *docker.Client, containerID string) (net.IP, error) {
+	c, err := client.InspectContainerWithContext(containerID, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("find container %s address: %w", containerID, err)
+	}
+	if c.NetworkSettings.IPAddress == "" {
+		return nil, fmt.Errorf("find container %s address: none assigned (check container logs?)", containerID)
+	}
+	ipv4 := net.ParseIP(c.NetworkSettings.IPAddress)
+	if ipv4 == nil {
+		return nil, fmt.Errorf("find container %s address: invalid IP %q", containerID, c.NetworkSettings.IPAddress)
+	}
+	return ipv4, nil
+}
+
+// StartContainer starts an already created container. If the container is
+// already running, this function no-ops.
+func StartContainer(ctx context.Context, client *docker.Client, containerID string) error {
+	c, err := client.InspectContainerWithContext(containerID, ctx)
+	if err == nil && c.State.Running {
+		return nil
+	}
+	return client.StartContainerWithContext(containerID, &docker.HostConfig{}, ctx)
 }
 
 // UploadFile sends the content of localFile (a host filesystem path) into
 // remotePath (a path to a directory inside the container) with the given
 // fileName.
-func (b Container) UploadFile(localFile string, fileName string, remotePath string) error {
-	f, err := os.Open(localFile)
+func UploadFile(ctx context.Context, client *docker.Client, containerID string, remotePath string, localPath string) error {
+	f, err := os.Open(localPath)
 	if err != nil {
 		return err
 	}
@@ -464,12 +380,12 @@ func (b Container) UploadFile(localFile string, fileName string, remotePath stri
 	if err != nil {
 		return err
 	}
-	return b.Upload(slashpath.Join(remotePath, fileName), f, header)
+	return Upload(ctx, client, containerID, remotePath, f, header)
 }
 
 // Upload writes the given content to a path inside the container. header.Name
 // is entirely ignored.
-func (b Container) Upload(remotePath string, content io.Reader, header *tar.Header) error {
+func Upload(ctx context.Context, client *docker.Client, containerID string, remotePath string, content io.Reader, header *tar.Header) error {
 	tmpFile, err := ioutil.TempFile("", "yb*.tar")
 	if err != nil {
 		return fmt.Errorf("upload file to container: %w", err)
@@ -491,7 +407,12 @@ func (b Container) Upload(remotePath string, content io.Reader, header *tar.Head
 	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("upload file to container: %w", err)
 	}
-	if err := b.uploadStream(tmpFile, remoteDir); err != nil {
+	err = client.UploadToContainer(containerID, docker.UploadToContainerOptions{
+		InputStream:          tmpFile,
+		Path:                 remoteDir,
+		NoOverwriteDirNonDir: true,
+	})
+	if err != nil {
 		return fmt.Errorf("upload file to container: %w", err)
 	}
 	return nil
@@ -511,194 +432,115 @@ func archiveFile(tf io.Writer, source io.Reader, header *tar.Header) error {
 	return nil
 }
 
-func (b Container) CommitImage(repository string, tag string) (string, error) {
-	client := DockerClient()
-
-	commitOpts := docker.CommitContainerOptions{
-		Container:  b.Id,
-		Repository: repository,
-		Tag:        tag,
-	}
-
-	img, err := client.CommitContainer(commitOpts)
-
-	if err != nil {
-		return "", err
-	}
-
-	log.Infof("Committed container %s as image %s:%s with id %s", b.Id, repository, tag, img.ID)
-
-	return img.ID, nil
-}
-
-func (b Container) MakeDirectoryInContainer(path string) error {
-	client := DockerClient()
-
-	cmdArray := strings.Split(fmt.Sprintf("mkdir -p %s", path), " ")
-
-	execOpts := docker.CreateExecOptions{
-		Env:          b.Definition.Environment,
-		Cmd:          cmdArray,
+// MkdirAll ensures that the given directory and all its parents directories
+// exist.
+func MkdirAll(ctx context.Context, client *docker.Client, containerID string, path string) error {
+	exec, err := client.CreateExec(docker.CreateExecOptions{
+		Context:      ctx,
+		Cmd:          []string{"mkdir", "-p", path},
 		AttachStdout: true,
 		AttachStderr: true,
-		Container:    b.Id,
-	}
-
-	exec, err := client.CreateExec(execOpts)
-
+		Container:    containerID,
+	})
 	if err != nil {
-		log.Infof("Can't create exec: %v", err)
-		return err
+		return fmt.Errorf("mkdir %q in container %q: %w", path, containerID, err)
 	}
-
-	startOpts := docker.StartExecOptions{
-		OutputStream: os.Stdout,
-		ErrorStream:  os.Stdout,
-	}
-
-	err = client.StartExec(exec.ID, startOpts)
-
+	out := new(bytes.Buffer)
+	err = client.StartExec(exec.ID, docker.StartExecOptions{
+		OutputStream: out,
+		ErrorStream:  out,
+	})
 	if err != nil {
-		log.Infof("Unable to run exec %s: %v", exec.ID, err)
-		return err
-	}
-
-	return nil
-
-}
-
-func (b Container) ExecInteractively(cmdString string, targetDir string) error {
-	return b.ExecInteractivelyWithEnv(cmdString, targetDir, []string{})
-}
-
-func (b Container) ExecInteractivelyWithEnv(cmdString string, targetDir string, env []string) error {
-
-	client := DockerClient()
-
-	shellCmd := []string{"bash", "-c", cmdString}
-
-	execOpts := docker.CreateExecOptions{
-		Env:          env,
-		Cmd:          shellCmd,
-		AttachStdout: true,
-		AttachStderr: true,
-		AttachStdin:  true,
-		Tty:          true,
-		Container:    b.Id,
-		WorkingDir:   targetDir,
-	}
-
-	if b.Definition.ExecUserId != "" || b.Definition.ExecGroupId != "" {
-		uidGid := fmt.Sprintf("%s:%s", b.Definition.ExecUserId, b.Definition.ExecGroupId)
-		execOpts.User = uidGid
-	}
-
-	exec, err := client.CreateExec(execOpts)
-
-	if err != nil {
-		return fmt.Errorf("Can't create exec: %v", err)
-	}
-
-	startOpts := docker.StartExecOptions{
-		OutputStream: os.Stdout,
-		ErrorStream:  os.Stderr,
-		InputStream:  os.Stdin,
-		RawTerminal:  true,
-		Tty:          true,
-	}
-
-	if err = client.StartExec(exec.ID, startOpts); err != nil {
-		return fmt.Errorf("Unable to run exec %s: %v", exec.ID, err)
-	}
-
-	results, err := client.InspectExec(exec.ID)
-	if err != nil {
-		return fmt.Errorf("Unable to get exec results %s: %v", exec.ID, err)
-	}
-
-	if results.ExitCode != 0 {
-		return fmt.Errorf("Command failed in container with status code %d", results.ExitCode)
-	}
-
-	return nil
-}
-
-type ExecError struct {
-	ExitCode int
-	Message  string
-}
-
-func (e *ExecError) Error() string {
-	return e.Message
-}
-
-func (b Container) ExecToStdoutWithEnv(cmdString string, targetDir string, env []string) error {
-	return b.ExecToWriterWithEnv(cmdString, targetDir, os.Stdout, env)
-}
-
-func (b Container) ExecToStdout(cmdString string, targetDir string) error {
-	return b.ExecToWriter(cmdString, targetDir, os.Stdout)
-}
-
-func (b Container) ExecToWriter(cmdString string, targetDir string, outputSink io.Writer) error {
-	return b.ExecToWriterWithEnv(cmdString, targetDir, outputSink, []string{})
-}
-
-func (b Container) ExecToWriterWithEnv(cmdString string, targetDir string, outputSink io.Writer, env []string) error {
-	client := DockerClient()
-
-	shellCmd := []string{"bash", "-c", cmdString}
-
-	execOpts := docker.CreateExecOptions{
-		Env:          env,
-		Cmd:          shellCmd,
-		AttachStdout: true,
-		AttachStderr: true,
-		Container:    b.Id,
-		WorkingDir:   targetDir,
-	}
-
-	if b.Definition.ExecUserId != "" || b.Definition.ExecGroupId != "" {
-		uidGid := fmt.Sprintf("%s:%s", b.Definition.ExecUserId, b.Definition.ExecGroupId)
-		execOpts.User = uidGid
-	}
-
-	exec, err := client.CreateExec(execOpts)
-
-	if err != nil {
-		return fmt.Errorf("Can't create exec: %v", err)
-	}
-
-	startOpts := docker.StartExecOptions{
-		OutputStream: outputSink,
-		ErrorStream:  outputSink,
-	}
-
-	err = client.StartExec(exec.ID, startOpts)
-
-	if err != nil {
-		return fmt.Errorf("Unable to run exec %s: %v", exec.ID, err)
-	}
-
-	results, err := client.InspectExec(exec.ID)
-	if err != nil {
-		return fmt.Errorf("Unable to get exec results %s: %v", exec.ID, err)
-	}
-
-	if results.ExitCode != 0 {
-		return &ExecError{
-			ExitCode: results.ExitCode,
-			Message:  fmt.Sprintf("Command failed in container with status code %d", results.ExitCode),
+		if out.Len() > 0 {
+			return fmt.Errorf("mkdir %q in container %q: %w\n%s", path, containerID, err, out)
 		}
+		return fmt.Errorf("mkdir %q in container %q: %w", path, containerID, err)
 	}
-
 	return nil
-
 }
 
-func newContainer(containerDef ContainerDefinition) (Container, error) {
-	client := DockerClient()
+// ExecShellOptions holds optional arguments to ExecShell.
+type ExecShellOptions struct {
+	Dir            string
+	Env            []string
+	CombinedOutput io.Writer
+	UID            string
+	GID            string
 
+	// If Interactive is true, then stdio from this exec is attached to the stdio
+	// of the running process.
+	Interactive bool
+}
+
+// ExecShell executes a bash shell command inside a container. If the process
+// exits with a non-zero code, it returns an error for which IsExitError returns
+// true.
+func ExecShell(ctx context.Context, client *docker.Client, containerID string, cmdString string, opts *ExecShellOptions) error {
+	if opts == nil {
+		opts = new(ExecShellOptions)
+	}
+
+	execOpts := docker.CreateExecOptions{
+		Context:      ctx,
+		Env:          opts.Env,
+		Cmd:          []string{"bash", "-c", cmdString},
+		AttachStdin:  opts.Interactive,
+		AttachStdout: opts.Interactive || opts.CombinedOutput != nil,
+		AttachStderr: opts.Interactive || opts.CombinedOutput != nil,
+		Tty:          opts.Interactive,
+		Container:    containerID,
+		WorkingDir:   opts.Dir,
+	}
+	if opts.UID != "" || opts.GID != "" {
+		execOpts.User = opts.UID + ":" + opts.GID
+	}
+	exec, err := client.CreateExec(execOpts)
+	if err != nil {
+		return fmt.Errorf("execute shell command in container %s: %w", containerID, err)
+	}
+
+	startOpts := docker.StartExecOptions{Context: ctx}
+	switch {
+	case opts.Interactive:
+		startOpts.OutputStream = os.Stdout
+		startOpts.ErrorStream = os.Stderr
+		startOpts.InputStream = os.Stdin
+		startOpts.RawTerminal = true
+		startOpts.Tty = true
+	case opts.CombinedOutput != nil:
+		startOpts.OutputStream = opts.CombinedOutput
+		startOpts.ErrorStream = opts.CombinedOutput
+	}
+	err = client.StartExec(exec.ID, startOpts)
+	if err != nil {
+		return fmt.Errorf("execute shell command in container %s: %w", containerID, err)
+	}
+
+	results, err := client.InspectExec(exec.ID)
+	if err != nil {
+		return fmt.Errorf("execute shell command in container %s: %w", containerID, err)
+	}
+	if results.ExitCode != 0 {
+		return fmt.Errorf("execute shell command in container %s: %w", containerID, exitError(results.ExitCode))
+	}
+	return nil
+}
+
+type exitError int
+
+func (e exitError) Error() string {
+	return fmt.Sprintf("exit code %d", int(e))
+}
+
+// IsExitError reports whether the error was caused by a Docker container
+// exiting with a non-zero code.
+func IsExitError(e error) (code int, ok bool) {
+	var ee exitError
+	ok = errors.As(e, &ee)
+	return int(ee), ok
+}
+
+func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writer, containerDef *ContainerDefinition) (*Container, error) {
 	if containerDef.Image == "" {
 		containerDef.Image = "yourbase/yb_ubuntu:18.04"
 	}
@@ -706,13 +548,15 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 	containerName := containerDef.containerName()
 	log.Infof("Creating container '%s'", containerName)
 
-	PullImage(containerDef)
+	if err := PullImage(ctx, client, pullOutput, containerDef); err != nil {
+		return nil, err
+	}
 
 	mounts, err := containerDef.DockerMounts()
 
 	if err != nil {
 		log.Errorf("Invalid mounts: %v", err)
-		return Container{}, err
+		return nil, err
 	}
 
 	var ports = make([]string, 0)
@@ -755,7 +599,7 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 			localPort, err := findFreePort()
 			if err != nil {
 				log.Errorf("Couldn't find free TCP port to forward from: %v", err)
-				return Container{}, err
+				return nil, err
 			}
 			log.Infof("Mapping %d locally to %d in the container.", localPort, checkPort)
 			containerDef.PortWaitCheck.LocalPortMap = localPort
@@ -794,23 +638,23 @@ func newContainer(containerDef ContainerDefinition) (Container, error) {
 		config.Cmd = cmdParts
 	}
 
-	container, err := client.CreateContainer(
-		docker.CreateContainerOptions{
-			Name:       containerName,
-			Config:     &config,
-			HostConfig: &hostConfig,
-		})
+	container, err := client.CreateContainer(docker.CreateContainerOptions{
+		Context:    ctx,
+		Name:       containerName,
+		Config:     &config,
+		HostConfig: &hostConfig,
+	})
 
 	if err != nil {
-		return Container{}, fmt.Errorf("Failed to create container: %v", err)
+		return nil, fmt.Errorf("Failed to create container: %v", err)
 	}
 
 	log.Debugf("Found container ID: %s", container.ID)
 
-	return Container{
+	return &Container{
 		Name:       containerName,
 		Id:         container.ID,
-		Definition: containerDef,
+		Definition: *containerDef,
 	}, nil
 }
 
@@ -827,9 +671,8 @@ func findFreePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-func CountLayersInImage(imageID string) (int, error) {
-	client := DockerClient()
-
+func CountLayersInImage(ctx context.Context, client *docker.Client, imageID string) (int, error) {
+	// TODO(light): This API call doesn't take in a Context yet.
 	img, err := client.InspectImage(imageID)
 	if err != nil {
 		return -1, fmt.Errorf("Couldn't get image info for image ID: %s", imageID)
@@ -841,30 +684,21 @@ func CountLayersInImage(imageID string) (int, error) {
 	return layerDepth, nil
 }
 
-func FindDockerImagesByTagPrefix(imageName string) ([]docker.APIImages, error) {
-
-	client := DockerClient()
-	filters := make(map[string][]string)
-
-	opts := docker.ListImagesOptions{
-		Filters: filters,
-	}
-
-	imgs, err := client.ListImages(opts)
+func FindDockerImagesByTagPrefix(ctx context.Context, client *docker.Client, imageName string) ([]docker.APIImages, error) {
+	imgs, err := client.ListImages(docker.ListImagesOptions{Context: ctx})
 	if err != nil {
 		return []docker.APIImages{}, fmt.Errorf("Error getting image list: %v\n", err)
 	}
 
-	matchingImages := make([]docker.APIImages, 0)
-	if len(imgs) > 0 {
-		for _, img := range imgs {
-			for _, tag := range img.RepoTags {
-				if strings.HasPrefix(tag, imageName) {
-					matchingImages = append(matchingImages, img)
-				}
+	var matchingImages []docker.APIImages
+images:
+	for _, img := range imgs {
+		for _, tag := range img.RepoTags {
+			if strings.HasPrefix(tag, imageName) {
+				matchingImages = append(matchingImages, img)
+				continue images
 			}
 		}
 	}
-
 	return matchingImages, nil
 }
