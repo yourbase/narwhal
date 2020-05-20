@@ -3,6 +3,7 @@ package narwhal
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
