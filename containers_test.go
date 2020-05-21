@@ -228,7 +228,7 @@ func TestSquashImage(t *testing.T) {
 
 	t.Logf("Pre layer count: %d", layers)
 
-	err = SquashImage(context.Background(), repo, tag)
+	err = SquashImage(context.Background(), client, repo, tag)
 	if err != nil {
 		t.Errorf("SquashImage failed: %v", err)
 	}
