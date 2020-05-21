@@ -21,6 +21,7 @@ import (
 
 	docker "github.com/johnewart/go-dockerclient"
 	log "github.com/sirupsen/logrus"
+	"github.com/yourbase/narwhal/internal/xcontext"
 )
 
 var client struct {
@@ -701,4 +702,105 @@ images:
 		}
 	}
 	return matchingImages, nil
+}
+
+// SquashImage takes a docker image with multiple layers and squashes it into
+// a single layer.  SquashImage takes advantage of the fact that docker
+// squashes layers into a single later when exported from a container
+// Note:  It can take minutes to export the container.  Please consider this
+// when setting context.Context.
+func SquashImage(ctx context.Context, client *docker.Client, repo, tag string) error {
+	squashImageId, err := imageId(repo, tag)
+	if err != nil {
+		return fmt.Errorf("SquashImage: %v", err)
+	}
+
+	tar, err := imageToTar(ctx, squashImageId)
+	if err != nil {
+		return fmt.Errorf("SquashImage: %v", err)
+	}
+	defer os.Remove(tar)
+
+	if err = client.ImportImage(docker.ImportImageOptions{
+		Repository: repo,
+		Tag:        tag,
+		Source:     tar,
+		Context:    ctx,
+	}); err != nil {
+		return fmt.Errorf("SquashImage: importing image error: %v", err)
+	}
+
+	log.Infof("Squashed image: %s:%s", repo, tag)
+
+	err = client.RemoveImageExtended(
+		squashImageId,
+		docker.RemoveImageOptions{
+			Force:   true,
+			Context: ctx})
+	if err != nil {
+		log.Infof("SquashImage: failed to remove image: (%s): %v", squashImageId, err)
+		return err
+	}
+	log.Debugf("SquashImage: removed max layer image (%s)", squashImageId)
+
+	return nil
+}
+
+// imageToTar creates a container from an image and exports it to a tar file
+// Note: the caller is responsible for removing the tar file
+func imageToTar(ctx context.Context, imageId string) (string, error) {
+	client := DockerClient()
+	containerName := fmt.Sprintf("export_%s", strings.ReplaceAll(imageId, ":", "_"))
+
+	container, err := client.CreateContainer(docker.CreateContainerOptions{
+		Name:    containerName,
+		Config:  &docker.Config{Image: imageId},
+		Context: ctx,
+	})
+	if err != nil {
+		return "", fmt.Errorf("create container error: %v", err)
+	}
+	log.Debugf("imageToTar: created container (%s) from imageId (%s)", containerName, imageId)
+	defer func() {
+		if err := client.RemoveContainer(docker.RemoveContainerOptions{
+			ID:            container.ID,
+			RemoveVolumes: true,
+			Context:       xcontext.Detach(ctx),
+		}); err != nil {
+			log.Infof("unable to remove container: %v", err)
+		}
+	}()
+
+	exportFile, err := ioutil.TempFile("", "squash-*.tar")
+	if err != nil {
+		return "", fmt.Errorf("error creating tmp file: %v", err)
+	}
+
+	if err = client.ExportContainer(docker.ExportContainerOptions{
+		ID:           container.ID,
+		OutputStream: exportFile,
+		Context:      ctx,
+	}); err != nil {
+		os.Remove(exportFile.Name())
+		return "", fmt.Errorf("error exporting container error: %v", err)
+	}
+
+	return exportFile.Name(), nil
+}
+
+func imageId(repo, tag string) (string, error) {
+	client := DockerClient()
+
+	imageName := fmt.Sprintf("%s:%s", repo, tag)
+	images, err := client.ListImages(docker.ListImagesOptions{
+		Filter: imageName,
+	})
+	if err != nil {
+		return "", fmt.Errorf("error finding image (%s): %v", imageName, err)
+	}
+	if len(images) < 1 {
+		return "", fmt.Errorf("image not found (%s:%s)", repo, tag)
+	}
+
+	return images[0].ID, nil
 }

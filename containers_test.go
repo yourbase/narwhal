@@ -192,6 +192,86 @@ func TestUpload(t *testing.T) {
 	}
 }
 
+func TestSquashImage(t *testing.T) {
+	ctx := context.Background()
+	client := DockerClient()
+	const (
+		repo  = "yourbase-layer-test"
+		tag   = "v1"
+		image = repo + ":" + tag
+	)
+
+	if err := buildLayeredImage(image); err != nil {
+		t.Fatal(err)
+	}
+
+	err := PullImageIfNotHere(ctx, client, &testLogWriter{logger: t}, &ContainerDefinition{
+		Image: image,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	squashImageId, err := imageId(repo, tag)
+	if err != nil {
+		t.Error(err)
+	}
+
+	layers, _ := CountLayersInImage(ctx, client, squashImageId)
+	if layers <= 1 {
+		t.Error("yourbase-layer-test should have more than one layer.")
+	}
+
+	t.Logf("Pre layer count: %d", layers)
+
+	err = SquashImage(context.Background(), client, repo, tag)
+	if err != nil {
+		t.Errorf("SquashImage failed: %v", err)
+	}
+
+	newImageId, err := imageId(repo, tag)
+	if err != nil {
+		t.Errorf("Couldn't find squashed image: %s", image)
+	}
+
+	// The new image should have only one layer
+	layers, err = CountLayersInImage(ctx, client, newImageId)
+	if err == nil && layers != 1 {
+		t.Error("yourbase-layer-test should be comprised of a single layer.")
+	}
+
+	t.Logf("Post layer count: %d", layers)
+
+	// Clean up
+	if err := client.RemoveImage(newImageId); err != nil {
+		t.Errorf("Could not removed squashed image")
+	}
+}
+
+func buildLayeredImage(imageName string) error {
+	client := DockerClient()
+
+	const dockerFile = "FROM alpine\nRUN apk add curl"
+	content := strings.NewReader(dockerFile)
+	inputbuf, outputbuf := new(bytes.Buffer), new(bytes.Buffer)
+	header := new(tar.Header)
+	header.Name = "Dockerfile"
+	header.Size = int64(len(dockerFile))
+	if err := archiveFile(inputbuf, content, header); err != nil {
+		return fmt.Errorf("upload file to container: %w", err)
+	}
+	opts := docker.BuildImageOptions{
+		Name:         imageName,
+		InputStream:  inputbuf,
+		OutputStream: outputbuf,
+	}
+	if err := client.BuildImage(opts); err != nil {
+		return fmt.Errorf("failed to build layered image: %v", err)
+	}
+
+	return nil
+}
+
 type logger interface {
 	Logf(format string, args ...interface{})
 }
