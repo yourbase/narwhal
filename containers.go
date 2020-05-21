@@ -876,9 +876,7 @@ func FindDockerImagesByTagPrefix(imageName string) ([]docker.APIImages, error) {
 // squashes layers into a single later when exported from a container
 // Note:  It can take minutes to export the container.  Please consider this
 // when setting context.Context.
-func SquashImage(ctx context.Context, repo, tag string) error {
-	client := DockerClient()
-
+func SquashImage(ctx context.Context, client *docker.Client, repo, tag string) error {
 	squashImageId, err := imageId(repo, tag)
 	if err != nil {
 		return fmt.Errorf("SquashImage: %v", err)
@@ -903,7 +901,9 @@ func SquashImage(ctx context.Context, repo, tag string) error {
 
 	err = client.RemoveImageExtended(
 		squashImageId,
-		docker.RemoveImageOptions{Force: true})
+		docker.RemoveImageOptions{
+			Force:   true,
+			Context: ctx})
 	if err != nil {
 		log.Infof("SquashImage: failed to remove image: (%s): %v", squashImageId, err)
 		return err
