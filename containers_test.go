@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	docker "github.com/johnewart/go-dockerclient"
 )
 
@@ -46,7 +47,9 @@ func TestSanitizeContainerName(t *testing.T) {
 }
 
 func TestNewServiceContext(t *testing.T) {
-	cd := ContainerDefinition{
+	ctx := context.Background()
+	client := DockerClient()
+	cd := &ContainerDefinition{
 		Image: "redis:latest",
 		Label: "redis",
 		PortWaitCheck: PortWaitCheck{
@@ -59,28 +62,27 @@ func TestNewServiceContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sc, err := NewServiceContextWithId(ctxId, "testapp-default")
+	sc, err := NewServiceContextWithId(ctx, client, ctxId, "testapp-default")
 	if err != nil {
 		t.Fatalf("Error creating context: %v", err)
 	}
 
 	defer sc.TearDown()
 
-	c, err := sc.StartContainer(cd)
+	c, err := sc.StartContainer(ctx, &testLogWriter{logger: t}, cd)
 	if err != nil {
 		t.Fatalf("Error standing up container: %v", err)
 	}
 
-	running, err := c.isRunning()
+	containerInfo, err := client.InspectContainerWithContext(c.Id, ctx)
 	if err != nil {
 		t.Fatalf("Couldn't determine if container was running: %v", err)
 	}
-
-	if !running {
+	if !containerInfo.State.Running {
 		t.Fatalf("Container isn't running like it should be")
 	}
 
-	ip, err := c.IPv4Address()
+	ip, err := IPv4Address(ctx, client, c.Id)
 	if err != nil {
 		t.Fatalf("Couldn't get IP for redis container: %v", err)
 	}
@@ -89,7 +91,9 @@ func TestNewServiceContext(t *testing.T) {
 }
 
 func TestNewServiceContextWithContainerTimeout(t *testing.T) {
-	cd := ContainerDefinition{
+	ctx := context.Background()
+	client := DockerClient()
+	cd := &ContainerDefinition{
 		Image:   "alpine:latest",
 		Label:   "test",
 		Command: "tail -f /dev/null",
@@ -103,13 +107,13 @@ func TestNewServiceContextWithContainerTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sc, err := NewServiceContextWithId(ctxId, "testapp-default")
+	sc, err := NewServiceContextWithId(ctx, client, ctxId, "testapp-default")
 	if err != nil {
 		t.Fatalf("Error creating context: %v", err)
 	}
 
-	if _, err := sc.StartContainer(cd); err != nil {
-		fmt.Printf("Expected timeout standing up container: %v\n", err)
+	if _, err := sc.StartContainer(ctx, &testLogWriter{logger: t}, cd); err != nil {
+		t.Errorf("Expected timeout standing up container: %v", err)
 	}
 
 	err = sc.TearDown()
@@ -119,11 +123,9 @@ func TestNewServiceContextWithContainerTimeout(t *testing.T) {
 }
 
 func TestUpload(t *testing.T) {
+	ctx := context.Background()
 	client := DockerClient()
-	if client == nil {
-		t.Skip("Could not find Docker daemon connection")
-	}
-	err := PullImageIfNotHere(ContainerDefinition{
+	err := PullImageIfNotHere(ctx, client, &testLogWriter{logger: t}, &ContainerDefinition{
 		Image: "hello-world",
 	})
 	if err != nil {
@@ -146,13 +148,9 @@ func TestUpload(t *testing.T) {
 		}
 	}()
 
-	b := Container{
-		Id:   container.ID,
-		Name: container.Name,
-	}
 	const path = "/foo.txt"
 	const content = "Hello, World!\n"
-	err = b.Upload(path, strings.NewReader(content), &tar.Header{
+	err = Upload(ctx, client, container.ID, path, strings.NewReader(content), &tar.Header{
 		Typeflag: tar.TypeReg,
 		Size:     int64(len(content)),
 	})
@@ -195,10 +193,8 @@ func TestUpload(t *testing.T) {
 }
 
 func TestSquashImage(t *testing.T) {
+	ctx := context.Background()
 	client := DockerClient()
-	if client == nil {
-		t.Skip("Could not find Docker daemon connection")
-	}
 	const (
 		repo  = "yourbase-layer-test"
 		tag   = "v1"
@@ -209,7 +205,7 @@ func TestSquashImage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := PullImageIfNotHere(ContainerDefinition{
+	err := PullImageIfNotHere(ctx, client, &testLogWriter{logger: t}, &ContainerDefinition{
 		Image: image,
 	})
 	if err != nil {
@@ -221,7 +217,7 @@ func TestSquashImage(t *testing.T) {
 		t.Error(err)
 	}
 
-	layers, _ := CountLayersInImage(squashImageId)
+	layers, _ := CountLayersInImage(ctx, client, squashImageId)
 	if layers <= 1 {
 		t.Error("yourbase-layer-test should have more than one layer.")
 	}
@@ -239,7 +235,7 @@ func TestSquashImage(t *testing.T) {
 	}
 
 	// The new image should have only one layer
-	layers, err = CountLayersInImage(newImageId)
+	layers, err = CountLayersInImage(ctx, client, newImageId)
 	if err == nil && layers != 1 {
 		t.Error("yourbase-layer-test should be comprised of a single layer.")
 	}
@@ -274,6 +270,65 @@ func buildLayeredImage(imageName string) error {
 	}
 
 	return nil
+}
+
+type logger interface {
+	Logf(format string, args ...interface{})
+}
+
+type testLogWriter struct {
+	logger logger
+	buf    bytes.Buffer
+}
+
+func (w *testLogWriter) Write(b []byte) (int, error) {
+	w.buf.Write(b)
+	for {
+		i := bytes.IndexByte(w.buf.Bytes(), '\n')
+		if i == -1 {
+			break
+		}
+		w.logger.Logf("%s", w.buf.Bytes()[:i])
+		w.buf.Next(i + 1)
+	}
+	return len(b), nil
+}
+
+type mockLogger []string
+
+func (ml *mockLogger) Logf(format string, args ...interface{}) {
+	*ml = append(*ml, fmt.Sprintf(format, args...))
+}
+
+func TestTestLogWriter(t *testing.T) {
+	tests := []struct {
+		name   string
+		writes []string
+		want   mockLogger
+	}{
+		{
+			name:   "Partial",
+			writes: []string{"Hello, ", "World!\n"},
+			want:   mockLogger{"Hello, World!"},
+		},
+		{
+			name:   "MultipleLines",
+			writes: []string{"foo\nbar\nbaz"},
+			want:   mockLogger{"foo", "bar"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ml := new(mockLogger)
+			w := &testLogWriter{logger: ml}
+			for _, ws := range test.writes {
+				io.WriteString(w, ws)
+			}
+			if diff := cmp.Diff(&test.want, ml); diff != "" {
+				t.Errorf("logs (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 func randomContextID() (string, error) {
