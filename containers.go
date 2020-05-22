@@ -549,7 +549,7 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 	containerName := containerDef.containerName()
 	log.Infof("Creating container '%s'", containerName)
 
-	if err := PullImage(ctx, client, pullOutput, containerDef); err != nil {
+	if err := PullImageIfNotHere(ctx, client, pullOutput, containerDef); err != nil {
 		return nil, err
 	}
 
