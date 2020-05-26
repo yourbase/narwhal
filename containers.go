@@ -89,8 +89,11 @@ func (c *ContainerDefinition) DockerMounts() ([]docker.HostMount, error) {
 				src = filepath.Join(c.LocalWorkDir, src)
 			}
 			// TODO do the same for dst?
-			if err := os.MkdirAll(src, 0777); err != nil {
-				return []docker.HostMount{}, fmt.Errorf("Couldn't make source dir %s: %v", src, err)
+			// os.Stat prevents /var/run/docker.sock from erroring out as "not a directory"
+			if _, err := os.Stat(src); os.IsNotExist(err) {
+				if err := os.MkdirAll(src, 0777); err != nil {
+					return []docker.HostMount{}, fmt.Errorf("Couldn't make source dir %s: %v", src, err)
+				}
 			}
 			mounts = append(mounts, docker.HostMount{Source: src, Target: dst, Type: "bind"})
 		} else {
