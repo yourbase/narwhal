@@ -112,18 +112,50 @@ func (c *ContainerDefinition) ImageNameWithTag() string {
 	return fmt.Sprintf("%s:%s", c.ImageName(), c.ImageTag())
 }
 
+// imageNameHasTag is a helper function to determine if an image name has a tag.
+// Tags will be after the first or second ":".  ":" will appear a 2nd time
+// for registries with a colon in the repo (localhost:5000/ubuntu:1804)
+func imageNameHasTag(name string) bool {
+	parts := strings.Split(name, ":")
+	if len(parts) == 3 {
+		return true
+	}
+
+	// "/" is not a valid char for tag names
+	if len(parts) == 2 && !strings.Contains(parts[1], "/") {
+		return true
+	}
+
+	return false
+
+}
 func (c *ContainerDefinition) ImageName() string {
 	parts := strings.Split(c.Image, ":")
+	if len(parts) == 3 {
+		return fmt.Sprintf("%s:%s", parts[0], parts[1])
+	}
+
+	if len(parts) == 2 && !imageNameHasTag(c.Image) {
+		return fmt.Sprintf("%s:%s", parts[0], parts[1])
+	}
+
 	return parts[0]
 }
 
 func (c *ContainerDefinition) ImageTag() string {
 	parts := strings.Split(c.Image, ":")
-	if len(parts) != 2 {
-		return "latest"
-	} else {
+	if len(parts) == 3 {
+		return parts[2]
+	}
+
+	// case -> yourbase/yb_ubuntu:18.04
+	if len(parts) == 2 && imageNameHasTag(c.Image) {
 		return parts[1]
 	}
+
+	// case -> localhost:6000/ubuntu
+	// case -> ubuntu
+	return "latest"
 }
 
 func (c *ContainerDefinition) containerName() string {
