@@ -21,6 +21,7 @@ import (
 
 	docker "github.com/johnewart/go-dockerclient"
 	log "github.com/sirupsen/logrus"
+	"github.com/yourbase/narwhal/imageref"
 	"github.com/yourbase/narwhal/internal/xcontext"
 )
 
@@ -109,21 +110,21 @@ func (c *ContainerDefinition) AddMount(mount string) {
 }
 
 func (c *ContainerDefinition) ImageNameWithTag() string {
-	return fmt.Sprintf("%s:%s", c.ImageName(), c.ImageTag())
+	return fmt.Sprintf("%s%s", c.ImageName(), c.ImageTag())
 }
 
 func (c *ContainerDefinition) ImageName() string {
-	parts := strings.Split(c.Image, ":")
-	return parts[0]
+	name, _, _ := imageref.ParseImageRef(c.Image)
+	return name
 }
 
 func (c *ContainerDefinition) ImageTag() string {
-	parts := strings.Split(c.Image, ":")
-	if len(parts) != 2 {
-		return "latest"
-	} else {
-		return parts[1]
+	_, tag, _ := imageref.ParseImageRef(c.Image)
+	if tag == "" {
+		return ":latest"
 	}
+
+	return tag
 }
 
 func (c *ContainerDefinition) containerName() string {
