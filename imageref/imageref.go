@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package docker provides a client for interacting with the local Docker
-// daemon. This currently shells out to the Docker CLI, but could use the HTTP
-// API directly in the future.
 package imageref
 
 import (
