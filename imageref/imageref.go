@@ -54,9 +54,9 @@ func ParseImageRef(s string) (name, tag, digest string) {
 	return s[:i], s[i:], digest
 }
 
-// ImageRefRegistry parses the registry (everything before the first slash) from
+// Registry parses the registry (everything before the first slash) from
 // a Docker image reference or name.
-func ImageRefRegistry(s string) string {
+func Registry(s string) string {
 	name, _, _ := ParseImageRef(s)
 	i := strings.IndexByte(name, '/')
 	if i == -1 {
