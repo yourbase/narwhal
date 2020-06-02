@@ -21,7 +21,7 @@ import (
 
 	docker "github.com/johnewart/go-dockerclient"
 	log "github.com/sirupsen/logrus"
-	"github.com/yourbase/narwhal/imageref"
+	"github.com/yourbase/narwhal/internal/imageref"
 	"github.com/yourbase/narwhal/internal/xcontext"
 )
 
@@ -114,12 +114,12 @@ func (c *ContainerDefinition) ImageNameWithTag() string {
 }
 
 func (c *ContainerDefinition) ImageName() string {
-	name, _, _ := imageref.ParseImageRef(c.Image)
+	name, _, _ := imageref.Parse(c.Image)
 	return name
 }
 
 func (c *ContainerDefinition) ImageTag() string {
-	_, tag, _ := imageref.ParseImageRef(c.Image)
+	_, tag, _ := imageref.Parse(c.Image)
 	if tag == "" {
 		return ":latest"
 	}

@@ -12,35 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// This package came from https://github.com/google/go-cloud/blob/c3d5b8353de0f7cc033276f04b4255d0ad10140f/internal/cmd/gocdk/internal/docker/docker.go
+
 package imageref
 
 import (
 	"strings"
 )
 
-// Image stores metadata about a Docker image.
-type Image struct {
-	// ID is the randomly generated ID of the image.
-	// See https://windsock.io/explaining-docker-image-ids/
-	ID string
-	// Repository is the name component of a Docker image reference.
-	// It may be empty if the image has no tags.
-	// See https://godoc.org/github.com/docker/distribution/reference
-	Repository string
-	// Tag is the tag component of a Docker image reference.
-	// It will be empty if the image has no tags.
-	// See https://godoc.org/github.com/docker/distribution/reference
-	Tag string
-	// Digest is the content-based hash of the image.
-	// It may be empty.
-	Digest string
-}
-
 // Parse parses a Docker image reference, as documented in
 // https://godoc.org/github.com/docker/distribution/reference. It permits some
 // looseness in characters, and in particular, permits the empty name form
 // ":foo". It is guaranteed that name + tag + digest == s.
-func ImageRef(s string) (name, tag, digest string) {
+func Parse(s string) (name, tag, digest string) {
 	if i := strings.LastIndexByte(s, '@'); i != -1 {
 		s, digest = s[:i], s[i:]
 	}
@@ -54,7 +38,7 @@ func ImageRef(s string) (name, tag, digest string) {
 // Registry parses the registry (everything before the first slash) from
 // a Docker image reference or name.
 func Registry(s string) string {
-	name, _, _ := ParseImageRef(s)
+	name, _, _ := Parse(s)
 	i := strings.IndexByte(name, '/')
 	if i == -1 {
 		return ""

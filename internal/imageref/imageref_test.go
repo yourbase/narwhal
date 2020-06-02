@@ -36,9 +36,9 @@ func TestParseImageRef(t *testing.T) {
 		{"example:!foo", "example:!foo", "", ""},
 	}
 	for _, test := range tests {
-		name, tag, digest := ParseImageRef(test.s)
+		name, tag, digest := Parse(test.s)
 		if name != test.name || tag != test.tag || digest != test.digest {
-			t.Errorf("parseImageRef(%q) = %q, %q, %q; want %q, %q, %q", test.s, name, tag, digest, test.name, test.tag, test.digest)
+			t.Errorf("parse(%q) = %q, %q, %q; want %q, %q, %q", test.s, name, tag, digest, test.name, test.tag, test.digest)
 		}
 	}
 }
