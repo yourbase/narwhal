@@ -39,11 +39,11 @@ type Image struct {
 	Digest string
 }
 
-// ParseImageRef parses a Docker image reference, as documented in
+// Parse parses a Docker image reference, as documented in
 // https://godoc.org/github.com/docker/distribution/reference. It permits some
 // looseness in characters, and in particular, permits the empty name form
 // ":foo". It is guaranteed that name + tag + digest == s.
-func ParseImageRef(s string) (name, tag, digest string) {
+func ImageRef(s string) (name, tag, digest string) {
 	if i := strings.LastIndexByte(s, '@'); i != -1 {
 		s, digest = s[:i], s[i:]
 	}
