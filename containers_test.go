@@ -338,3 +338,123 @@ func randomContextID() (string, error) {
 	}
 	return hex.EncodeToString(buf[:]), nil
 }
+
+func TestContainerDefinition_ImageNameWithTag(t *testing.T) {
+
+	tests := []struct {
+		imageName string
+		want      string
+	}{
+		{
+			imageName: "localhost:6000/yourbase/yb_ubuntu:18.04",
+			want:      "localhost:6000/yourbase/yb_ubuntu:18.04",
+		},
+		{
+			imageName: "localhost:6000/yourbase/yb_ubuntu",
+			want:      "localhost:6000/yourbase/yb_ubuntu:latest",
+		},
+		{
+			imageName: "yourbase/yb_ubuntu:18.04",
+			want:      "yourbase/yb_ubuntu:18.04",
+		},
+		{
+			imageName: "ubuntu:18.04",
+			want:      "ubuntu:18.04",
+		},
+		{
+			imageName: "ubuntu",
+			want:      "ubuntu:latest",
+		},
+	}
+	for _, tt := range tests {
+		t.Run("ImageNameWithTag", func(t *testing.T) {
+			c := &ContainerDefinition{
+				Image: tt.imageName,
+			}
+			if got := c.ImageNameWithTag(); got != tt.want {
+				t.Errorf("ContainerDefinition.ImageNameWithTag() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+func TestContainerDefinition_ImageName(t *testing.T) {
+
+	tests := []struct {
+		imageName string
+		want      string
+	}{
+		{
+			imageName: "yourbase/yb_ubuntu:18.04",
+			want:      "yourbase/yb_ubuntu",
+		},
+		{
+			imageName: "localhost:6000/yourbase/yb_ubuntu",
+			want:      "localhost:6000/yourbase/yb_ubuntu",
+		},
+		{
+			imageName: "ubuntu:18.04",
+			want:      "ubuntu",
+		},
+		{
+			imageName: "localhost:6000/yourbase/yb_ubuntu:18.04",
+			want:      "localhost:6000/yourbase/yb_ubuntu",
+		},
+		{
+			imageName: "ubuntu",
+			want:      "ubuntu",
+		},
+	}
+	for _, tt := range tests {
+		t.Run("ImageName", func(t *testing.T) {
+			c := &ContainerDefinition{
+				Image: tt.imageName,
+			}
+			if got := c.ImageName(); got != tt.want {
+				t.Errorf("ContainerDefinition.ImageName() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainerDefinition_ImageTag(t *testing.T) {
+
+	tests := []struct {
+		imageName string
+		want      string
+	}{
+		{
+			imageName: "yourbase/yb_ubuntu:18.04",
+			want:      ":18.04",
+		},
+		{
+			imageName: "ubuntu:18.04",
+			want:      ":18.04",
+		},
+		{
+			imageName: "localhost:6000/yourbase/yb_ubuntu:18.04",
+			want:      ":18.04",
+		},
+		{
+			imageName: "ubuntu",
+			want:      ":latest",
+		},
+		{
+			imageName: "yourbase/yb_ubuntu",
+			want:      ":latest",
+		},
+		{
+			imageName: "localhost:6000/yourbase/yb_ubuntu",
+			want:      ":latest",
+		},
+	}
+	for _, tt := range tests {
+		t.Run("ImageTag", func(t *testing.T) {
+			c := &ContainerDefinition{
+				Image: tt.imageName,
+			}
+			if got := c.ImageTag(); got != tt.want {
+				t.Errorf("ContainerDefinition.ImageTag() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
