@@ -110,7 +110,7 @@ func (c *ContainerDefinition) AddMount(mount string) {
 }
 
 func (c *ContainerDefinition) ImageNameWithTag() string {
-	return fmt.Sprintf("%s%s", c.ImageName(), c.ImageTag())
+	return fmt.Sprintf("%s:%s", c.ImageName(), c.ImageTag())
 }
 
 func (c *ContainerDefinition) ImageName() string {
@@ -121,10 +121,10 @@ func (c *ContainerDefinition) ImageName() string {
 func (c *ContainerDefinition) ImageTag() string {
 	_, tag, _ := imageref.Parse(c.Image)
 	if tag == "" {
-		return ":latest"
+		return "latest"
 	}
 
-	return tag
+	return strings.Replace(tag, ":", "", -1)
 }
 
 func (c *ContainerDefinition) containerName() string {
