@@ -424,27 +424,27 @@ func TestContainerDefinition_ImageTag(t *testing.T) {
 	}{
 		{
 			imageName: "yourbase/yb_ubuntu:18.04",
-			want:      ":18.04",
+			want:      "18.04",
 		},
 		{
 			imageName: "ubuntu:18.04",
-			want:      ":18.04",
+			want:      "18.04",
 		},
 		{
 			imageName: "localhost:6000/yourbase/yb_ubuntu:18.04",
-			want:      ":18.04",
+			want:      "18.04",
 		},
 		{
 			imageName: "ubuntu",
-			want:      ":latest",
+			want:      "latest",
 		},
 		{
 			imageName: "yourbase/yb_ubuntu",
-			want:      ":latest",
+			want:      "latest",
 		},
 		{
 			imageName: "localhost:6000/yourbase/yb_ubuntu",
-			want:      ":latest",
+			want:      "latest",
 		},
 	}
 	for _, tt := range tests {
