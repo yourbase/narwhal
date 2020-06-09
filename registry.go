@@ -39,7 +39,7 @@ func listTagsByRepo(ctx context.Context, reg *registry.Registry, repo string) ([
 		timeout := deadline.Sub(time.Now())
 		if timeout <= 0 {
 			// Deadline already exceeded
-			return nil, fmt.Errorf("listTagsByRepo exceeded deadline")
+			return nil, fmt.Errorf("list tags in %q: %w", repo, context.DeadlineExceeded)
 		}
 		reg.Client.Timeout = timeout
 	}
