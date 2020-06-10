@@ -366,6 +366,16 @@ func StartContainer(ctx context.Context, client *docker.Client, containerID stri
 	return client.StartContainerWithContext(containerID, &docker.HostConfig{}, ctx)
 }
 
+// IsRunning check if a container is running by it's ID
+func IsRunning(ctx context.Context, client *docker.Client, containerID string) (bool, error) {
+	c, err := client.InspectContainerWithContext(containerID, ctx)
+	if err != nil {
+		return false, fmt.Errorf("Couldn't determine state of container %s: %v", containerID, err)
+	}
+
+	return c.State.Running, nil
+}
+
 // UploadFile sends the content of localFile (a host filesystem path) into
 // remotePath (a path to a directory inside the container) with the given
 // fileName.
