@@ -9,11 +9,17 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+type RegistryConfig struct {
+	Url      string
+	Username string
+	Password string
+}
+
 // ListTagsByRepo uses the OCI v2 interface to query a registry for the tags associated
 // with a registry.
-func ListTagsByRepo(ctx context.Context, registryURL, repo, username, password string) ([]string, error) {
-	log.Debugf("ListTagsByRepo: Registry (%s)", registryURL)
-	reg, err := registry.New(registryURL, username, password)
+func ListTagsByRepo(ctx context.Context, rc RegistryConfig, repo string) ([]string, error) {
+	log.Debugf("ListTagsByRepo: Registry (%s)", rc.Url)
+	reg, err := registry.New(rc.Url, rc.Username, rc.Password)
 	if err != nil {
 		return nil, fmt.Errorf("ListRepoTagsforRegistry connection error: %v", err)
 	}
@@ -23,9 +29,9 @@ func ListTagsByRepo(ctx context.Context, registryURL, repo, username, password s
 
 // ListTagsByRepoInsecure uses the OCI v2 interface to query a registry for the tags associated
 // with a registry.
-func ListTagsByRepoInsecure(ctx context.Context, registryURL, repo, username, password string) ([]string, error) {
-	log.Debugf("ListTagsByRepoInsecure: Registry (%s)", registryURL)
-	reg, err := registry.NewInsecure(registryURL, username, password)
+func ListTagsByRepoInsecure(ctx context.Context, rc RegistryConfig, repo string) ([]string, error) {
+	log.Debugf("ListTagsByRepoInsecure: Registry (%s)", rc.Url)
+	reg, err := registry.NewInsecure(rc.Url, rc.Username, rc.Password)
 	if err != nil {
 		return nil, fmt.Errorf("ListTagsByRepoInsecure connection error: %v", err)
 	}
