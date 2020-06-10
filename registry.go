@@ -10,7 +10,7 @@ import (
 )
 
 type RegistryConfig struct {
-	Url      string
+	URL      string
 	Username string
 	Password string
 }
