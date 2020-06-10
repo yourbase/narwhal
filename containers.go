@@ -246,7 +246,7 @@ func RemoveContainerAndVolumes(ctx context.Context, client *docker.Client, conta
 }
 
 // PullImage unconditionally pulls the image for the given container definition.
-func PullImage(ctx context.Context, client *docker.Client, output io.Writer, c *ContainerDefinition) error {
+func PullImage(ctx context.Context, client *docker.Client, output io.Writer, c *ContainerDefinition, authConfig docker.AuthConfiguration) error {
 	imageName := c.ImageName()
 	imageTag := c.ImageTag()
 
@@ -257,8 +257,6 @@ func PullImage(ctx context.Context, client *docker.Client, output io.Writer, c *
 		OutputStream: output,
 	}
 
-	authConfig := docker.AuthConfiguration{}
-
 	if err := client.PullImage(pullOpts, authConfig); err != nil {
 		return fmt.Errorf("Unable to pull image '%s:%s': %v", imageName, imageTag, err)
 	}
@@ -268,7 +266,7 @@ func PullImage(ctx context.Context, client *docker.Client, output io.Writer, c *
 
 // PullImageIfNotHere pulls the image for the given container definition if it
 // is not present in the Docker daemon's storage.
-func PullImageIfNotHere(ctx context.Context, client *docker.Client, output io.Writer, c *ContainerDefinition) error {
+func PullImageIfNotHere(ctx context.Context, client *docker.Client, output io.Writer, c *ContainerDefinition, authConfig docker.AuthConfiguration) error {
 	imageLabel := c.ImageNameWithTag()
 	log.Debugf("Pulling %s if needed...", imageLabel)
 
@@ -289,12 +287,12 @@ func PullImageIfNotHere(ctx context.Context, client *docker.Client, output io.Wr
 	}
 
 	log.Infof("Image %s not found, pulling", imageLabel)
-	return PullImage(ctx, client, output, c)
+	return PullImage(ctx, client, output, c, authConfig)
 }
 
 func BuildImageWithArchive(ctx context.Context, client *docker.Client, pullOutput io.Writer, cd *ContainerDefinition, repository, tag, localFile, remotePath string) error {
 
-	err := PullImageIfNotHere(ctx, client, pullOutput, cd)
+	err := PullImageIfNotHere(ctx, client, pullOutput, cd, docker.AuthConfiguration{})
 	if err != nil {
 		return fmt.Errorf("Error pulling image (%s): %v", cd.Image, err)
 	}
@@ -553,7 +551,7 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 	containerName := containerDef.containerName()
 	log.Infof("Creating container '%s'", containerName)
 
-	if err := PullImageIfNotHere(ctx, client, pullOutput, containerDef); err != nil {
+	if err := PullImageIfNotHere(ctx, client, pullOutput, containerDef, docker.AuthConfiguration{}); err != nil {
 		return nil, err
 	}
 

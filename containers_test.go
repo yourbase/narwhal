@@ -127,7 +127,7 @@ func TestUpload(t *testing.T) {
 	client := DockerClient()
 	err := PullImageIfNotHere(ctx, client, &testLogWriter{logger: t}, &ContainerDefinition{
 		Image: "hello-world",
-	})
+	}, docker.AuthConfiguration{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestSquashImage(t *testing.T) {
 
 	err := PullImageIfNotHere(ctx, client, &testLogWriter{logger: t}, &ContainerDefinition{
 		Image: image,
-	})
+	}, docker.AuthConfiguration{})
 	if err != nil {
 		t.Fatal(err)
 	}
