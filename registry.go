@@ -18,8 +18,8 @@ type RegistryConfig struct {
 // ListTagsByRepo uses the OCI v2 interface to query a registry for the tags associated
 // with a registry.
 func ListTagsByRepo(ctx context.Context, rc RegistryConfig, repo string) ([]string, error) {
-	log.Debugf("ListTagsByRepo: Registry (%s)", rc.Url)
-	reg, err := registry.New(rc.Url, rc.Username, rc.Password)
+	log.Debugf("ListTagsByRepo: Registry (%s)", rc.URL)
+	reg, err := registry.New(rc.URL, rc.Username, rc.Password)
 	if err != nil {
 		return nil, fmt.Errorf("ListRepoTagsforRegistry connection error: %v", err)
 	}
@@ -30,8 +30,8 @@ func ListTagsByRepo(ctx context.Context, rc RegistryConfig, repo string) ([]stri
 // ListTagsByRepoInsecure uses the OCI v2 interface to query a registry for the tags associated
 // with a registry.
 func ListTagsByRepoInsecure(ctx context.Context, rc RegistryConfig, repo string) ([]string, error) {
-	log.Debugf("ListTagsByRepoInsecure: Registry (%s)", rc.Url)
-	reg, err := registry.NewInsecure(rc.Url, rc.Username, rc.Password)
+	log.Debugf("ListTagsByRepoInsecure: Registry (%s)", rc.URL)
+	reg, err := registry.NewInsecure(rc.URL, rc.Username, rc.Password)
 	if err != nil {
 		return nil, fmt.Errorf("ListTagsByRepoInsecure connection error: %v", err)
 	}
