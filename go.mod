@@ -14,6 +14,7 @@ require (
 	golang.org/x/sys v0.0.0-20200610111108-226ff32320da // indirect
 	google.golang.org/genproto v0.0.0-20200610104632-a5b850bcf112 // indirect
 	google.golang.org/grpc v1.29.1 // indirect
+	zombiezen.com/go/log v1.0.0
 )
 
 go 1.14

@@ -20,9 +20,9 @@ import (
 	"sync"
 
 	docker "github.com/johnewart/go-dockerclient"
-	log "github.com/sirupsen/logrus"
 	"github.com/yourbase/narwhal/internal/imageref"
 	"github.com/yourbase/narwhal/internal/xcontext"
+	"zombiezen.com/go/log"
 )
 
 var client struct {
@@ -175,7 +175,7 @@ func FindContainer(ctx context.Context, client *docker.Client, cd *ContainerDefi
 
 	containerName := cd.containerName()
 
-	log.Debugf("Looking for container: %s", containerName)
+	log.Debugf(ctx, "Looking for container: %s", containerName)
 
 	result, err := client.ListContainers(docker.ListContainersOptions{
 		Context: ctx,
@@ -192,10 +192,10 @@ func FindContainer(ctx context.Context, client *docker.Client, cd *ContainerDefi
 	}
 
 	for _, c := range result {
-		log.Debugf("ID: %s -- NAME: %s", c.ID, c.Names)
+		log.Debugf(ctx, "ID: %s -- NAME: %s", c.ID, c.Names)
 	}
 	c := result[0]
-	log.Debugf("Found container %s with ID %s", containerName, c.ID)
+	log.Debugf(ctx, "Found container %s with ID %s", containerName, c.ID)
 	container, err := client.InspectContainer(c.ID)
 	if err != nil {
 		return nil, err
@@ -214,7 +214,7 @@ func FindContainer(ctx context.Context, client *docker.Client, cd *ContainerDefi
 							localPort, _ := strconv.Atoi(v[0].HostPort)
 							cd = cd.clone()
 							cd.PortWaitCheck.LocalPortMap = localPort
-							log.Infof("Will use 127.0.0.1:%d for port check", localPort)
+							log.Infof(ctx, "Will use 127.0.0.1:%d for port check", localPort)
 						}
 					}
 				}
@@ -268,7 +268,7 @@ func PullImage(ctx context.Context, client *docker.Client, output io.Writer, c *
 // is not present in the Docker daemon's storage.
 func PullImageIfNotHere(ctx context.Context, client *docker.Client, output io.Writer, c *ContainerDefinition, authConfig docker.AuthConfiguration) error {
 	imageLabel := c.ImageNameWithTag()
-	log.Debugf("Pulling %s if needed...", imageLabel)
+	log.Debugf(ctx, "Pulling %s if needed...", imageLabel)
 
 	imgs, err := client.ListImages(docker.ListImagesOptions{
 		Context: ctx,
@@ -280,13 +280,13 @@ func PullImageIfNotHere(ctx context.Context, client *docker.Client, output io.Wr
 	for _, img := range imgs {
 		for _, tag := range img.RepoTags {
 			if tag == imageLabel {
-				log.Debugf("Found image: %s with tags: %s", img.ID, strings.Join(img.RepoTags, ","))
+				log.Debugf(ctx, "Found image: %s with tags: %s", img.ID, strings.Join(img.RepoTags, ","))
 				return nil
 			}
 		}
 	}
 
-	log.Infof("Image %s not found, pulling", imageLabel)
+	log.Infof(ctx, "Image %s not found, pulling", imageLabel)
 	return PullImage(ctx, client, output, c, authConfig)
 }
 
@@ -303,7 +303,7 @@ func BuildImageWithArchive(ctx context.Context, client *docker.Client, pullOutpu
 	}
 	defer func() {
 		if err := RemoveContainerAndVolumes(ctx, client, container.Id); err != nil {
-			log.Errorf("Unable to destroy temporary container: %v", err)
+			log.Errorf(ctx, "Unable to destroy temporary container: %v", err)
 		}
 	}()
 
@@ -559,7 +559,7 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 	}
 
 	containerName := containerDef.containerName()
-	log.Infof("Creating container '%s'", containerName)
+	log.Infof(ctx, "Creating container '%s'", containerName)
 
 	if err := PullImageIfNotHere(ctx, client, pullOutput, containerDef, docker.AuthConfiguration{}); err != nil {
 		return nil, err
@@ -568,8 +568,7 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 	mounts, err := containerDef.DockerMounts()
 
 	if err != nil {
-		log.Errorf("Invalid mounts: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("invalid mounts: %w", err)
 	}
 
 	var ports = make([]string, 0)
@@ -577,7 +576,7 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 	var exposedPorts = make(map[docker.Port]struct{})
 
 	if len(containerDef.Ports) > 0 {
-		log.Infof("Will map the following ports: ")
+		log.Infof(ctx, "Will map the following ports: ")
 
 		for _, portSpec := range containerDef.Ports {
 			parts := strings.Split(portSpec, ":")
@@ -595,7 +594,7 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 			portKey := docker.Port(portStr)
 			ports = append(ports, portStr)
 
-			log.Infof("  * %s -> %s/%s in container", externalPort, internalPort, protocol)
+			log.Infof(ctx, "  * %s -> %s/%s in container", externalPort, internalPort, protocol)
 			var pb = make([]docker.PortBinding, 0)
 			pb = append(pb, docker.PortBinding{HostIP: "0.0.0.0", HostPort: externalPort})
 			bindings[portKey] = pb
@@ -608,13 +607,12 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 		checkPort := containerDef.PortWaitCheck.Port
 		// Port wait check, need to map to localhost port if we're on Darwin (VM networking...)
 		if runtime.GOOS == "darwin" {
-			log.Infof("Port wait check on port %d; finding free local port...", checkPort)
+			log.Infof(ctx, "Port wait check on port %d; finding free local port...", checkPort)
 			localPort, err := findFreePort()
 			if err != nil {
-				log.Errorf("Couldn't find free TCP port to forward from: %v", err)
-				return nil, err
+				return nil, fmt.Errorf("find free TCP port to forward from: %w", err)
 			}
-			log.Infof("Mapping %d locally to %d in the container.", localPort, checkPort)
+			log.Infof(ctx, "Mapping %d locally to %d in the container.", localPort, checkPort)
 			containerDef.PortWaitCheck.LocalPortMap = localPort
 			pstr := fmt.Sprintf("%d/tcp", checkPort)
 			pkey := docker.Port(pstr)
@@ -646,7 +644,7 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 
 	if len(containerDef.Command) > 0 {
 		cmd := containerDef.Command
-		log.Debugf("Will run %s in the container", cmd)
+		log.Debugf(ctx, "Will run %s in the container", cmd)
 		cmdParts := strings.Split(cmd, " ")
 		config.Cmd = cmdParts
 	}
@@ -662,7 +660,7 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 		return nil, fmt.Errorf("Failed to create container: %v", err)
 	}
 
-	log.Debugf("Found container ID: %s", container.ID)
+	log.Debugf(ctx, "Found container ID: %s", container.ID)
 
 	return &Container{
 		Name:       containerName,
@@ -742,7 +740,7 @@ func SquashImage(ctx context.Context, client *docker.Client, repo, tag string) e
 		return fmt.Errorf("SquashImage: importing image error: %v", err)
 	}
 
-	log.Infof("Squashed image: %s:%s", repo, tag)
+	log.Infof(ctx, "Squashed image: %s:%s", repo, tag)
 
 	err = client.RemoveImageExtended(
 		squashImageId,
@@ -750,10 +748,9 @@ func SquashImage(ctx context.Context, client *docker.Client, repo, tag string) e
 			Force:   true,
 			Context: ctx})
 	if err != nil {
-		log.Infof("SquashImage: failed to remove image: (%s): %v", squashImageId, err)
-		return err
+		return fmt.Errorf("SquashImage: failed to remove image %s: %w", squashImageId, err)
 	}
-	log.Debugf("SquashImage: removed max layer image (%s)", squashImageId)
+	log.Debugf(ctx, "SquashImage: removed max layer image (%s)", squashImageId)
 
 	return nil
 }
@@ -772,14 +769,14 @@ func imageToTar(ctx context.Context, imageId string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create container error: %v", err)
 	}
-	log.Debugf("imageToTar: created container (%s) from imageId (%s)", containerName, imageId)
+	log.Debugf(ctx, "imageToTar: created container (%s) from imageId (%s)", containerName, imageId)
 	defer func() {
 		if err := client.RemoveContainer(docker.RemoveContainerOptions{
 			ID:            container.ID,
 			RemoveVolumes: true,
 			Context:       xcontext.Detach(ctx),
 		}); err != nil {
-			log.Infof("unable to remove container: %v", err)
+			log.Infof(ctx, "unable to remove container: %v", err)
 		}
 	}()
 

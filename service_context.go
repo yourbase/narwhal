@@ -8,7 +8,8 @@ import (
 	"time"
 
 	docker "github.com/johnewart/go-dockerclient"
-	log "github.com/sirupsen/logrus"
+	"github.com/yourbase/narwhal/internal/xcontext"
+	"zombiezen.com/go/log"
 )
 
 type ServiceContext struct {
@@ -20,9 +21,9 @@ type ServiceContext struct {
 }
 
 func NewServiceContextWithId(ctx context.Context, client *docker.Client, ctxId string, workDir string) (*ServiceContext, error) {
-	log.Infof("Creating service context '%s' in %s...", ctxId, workDir)
+	log.Infof(ctx, "Creating service context '%s' in %s...", ctxId, workDir)
 
-	network, err := findNetworkByName(client, ctxId)
+	network, err := findNetworkByName(ctx, client, ctxId)
 	if err != nil {
 		return nil, fmt.Errorf("Error trying to find existing network: %v", err)
 	}
@@ -45,8 +46,8 @@ func NewServiceContextWithId(ctx context.Context, client *docker.Client, ctxId s
 	}, nil
 }
 
-func findNetworkByName(client *docker.Client, name string) (*docker.Network, error) {
-	log.Debugf("Finding network by name %s", name)
+func findNetworkByName(ctx context.Context, client *docker.Client, name string) (*docker.Network, error) {
+	log.Debugf(ctx, "Finding network by name %s", name)
 	// TODO(light): This should take in a Context, but doesn't.
 	networks, err := client.FilteredListNetworks(docker.NetworkFilterOpts{
 		"name": {
@@ -68,35 +69,32 @@ func (sc *ServiceContext) FindContainer(ctx context.Context, cd *ContainerDefini
 	return FindContainer(ctx, sc.DockerClient, cd)
 }
 
-func (sc *ServiceContext) TearDown() error {
-	log.Infof("Terminating containers...")
-	// TODO(light): I think this should either be background or a really long
-	// timeout. Because this is a cleanup function, it's unclear what should
-	// happen.
-	ctx := context.TODO()
+func (sc *ServiceContext) TearDown(ctx context.Context) error {
+	ctx = xcontext.Detach(ctx)
+	log.Infof(ctx, "Terminating containers...")
 
 	for i := range sc.ContainerDefinitions {
 		c := &sc.ContainerDefinitions[i]
-		log.Infof("  %s...", c.Image)
+		log.Infof(ctx, "  %s...", c.Image)
 
 		container, err := sc.FindContainer(ctx, c)
 		if err != nil {
-			log.Infof("Problem searching for container: %v", err)
+			log.Infof(ctx, "Problem searching for container: %v", err)
 			continue
 		}
 
 		sc.DockerClient.StopContainerWithContext(container.Id, 0, ctx)
 		if err := RemoveContainerAndVolumes(ctx, sc.DockerClient, container.Id); err != nil {
-			log.Warnf("Unable to destroy container %s: %v", container.Id, err)
+			log.Warnf(ctx, "Unable to destroy container %s: %v", container.Id, err)
 		}
 	}
 
 	if sc.NetworkId != "" {
-		log.Infof("Removing network...")
+		log.Infof(ctx, "Removing network...")
 		// TODO(light): Add context.
 		err := sc.DockerClient.RemoveNetwork(sc.NetworkId)
 		if err != nil {
-			log.Warnf("Unable to remove network %s: %v", sc.NetworkId, err)
+			log.Warnf(ctx, "Unable to remove network %s: %v", sc.NetworkId, err)
 		}
 	}
 
@@ -108,7 +106,7 @@ func (sc *ServiceContext) StartContainer(ctx context.Context, pullOutput io.Writ
 
 	if err != nil {
 		if container != nil {
-			log.Warnf("Stopping failed-to-start container %s: %v", cd.containerName(), err)
+			log.Warnf(ctx, "Stopping failed-to-start container %s: %v", cd.containerName(), err)
 			// TODO(light): Add timeout that ignores ctx.Done().
 			sc.DockerClient.StopContainerWithContext(container.Id, 0, ctx)
 		}
@@ -139,7 +137,7 @@ func (sc *ServiceContext) startContainer(ctx context.Context, pullOutput io.Writ
 	container, findErr := sc.FindContainer(ctx, cd)
 	switch {
 	case findErr == nil:
-		log.Infof("Container '%s' for %s already exists, not re-creating...", cd.containerName(), cd.Image)
+		log.Infof(ctx, "Container '%s' for %s already exists, not re-creating...", cd.containerName(), cd.Image)
 	case IsContainerNotFound(findErr):
 		var err error
 		container, err = newContainer(ctx, sc.DockerClient, pullOutput, cd)
@@ -147,10 +145,10 @@ func (sc *ServiceContext) startContainer(ctx context.Context, pullOutput io.Writ
 			return container, err
 		}
 
-		log.Infof("Created container: %s", container.Id)
+		log.Infof(ctx, "Created container: %s", container.Id)
 
 		// Attach to network
-		log.Infof("Attaching container to network ... ")
+		log.Infof(ctx, "Attaching container to network ... ")
 		opts := docker.NetworkConnectionOptions{
 			Context:   ctx,
 			Container: container.Id,
@@ -173,7 +171,7 @@ func (sc *ServiceContext) startContainer(ctx context.Context, pullOutput io.Writ
 	if err != nil {
 		return container, fmt.Errorf("Couldn't determine IP of container dependency %s (%s): %v", cd.Label, container.Id, err)
 	}
-	log.Infof("Container IP: %s", ipv4)
+	log.Infof(ctx, "Container IP: %s", ipv4)
 
 	if check := container.Definition.PortWaitCheck; check.Port != 0 {
 		addr := &net.TCPAddr{
@@ -187,11 +185,10 @@ func (sc *ServiceContext) startContainer(ctx context.Context, pullOutput io.Writ
 			}
 		}
 		timeout := time.Duration(check.Timeout) * time.Second
-		log.Infof("Waiting up to %v for %s to be ready... ", timeout, cd.Label)
+		log.Infof(ctx, "Waiting up to %v for %s to be ready... ", timeout, cd.Label)
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		if err := waitForTCPPort(ctx, addr.String()); err != nil {
-			log.Warnf("Timed out!")
 			return container, fmt.Errorf("Timeout occured waiting for container '%s' to be ready", cd.Label)
 		}
 	}
