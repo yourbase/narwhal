@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	docker "github.com/johnewart/go-dockerclient"
+	"zombiezen.com/go/log/testlog"
 )
 
 /* TODO
@@ -22,6 +24,11 @@ Tests for:
 * re-using existing container (linux / darwin) and port checks
 * local source mapping
 */
+
+func TestMain(m *testing.M) {
+	testlog.Main(nil)
+	os.Exit(m.Run())
+}
 
 func TestSanitizeContainerName(t *testing.T) {
 	bogus := []string{
@@ -47,7 +54,7 @@ func TestSanitizeContainerName(t *testing.T) {
 }
 
 func TestNewServiceContext(t *testing.T) {
-	ctx := context.Background()
+	ctx := testlog.WithTB(context.Background(), t)
 	client := DockerClient()
 	cd := &ContainerDefinition{
 		Image: "redis:latest",
@@ -67,7 +74,7 @@ func TestNewServiceContext(t *testing.T) {
 		t.Fatalf("Error creating context: %v", err)
 	}
 
-	defer sc.TearDown()
+	defer sc.TearDown(ctx)
 
 	c, err := sc.StartContainer(ctx, &testLogWriter{logger: t}, cd)
 	if err != nil {
@@ -91,7 +98,7 @@ func TestNewServiceContext(t *testing.T) {
 }
 
 func TestNewServiceContextWithContainerTimeout(t *testing.T) {
-	ctx := context.Background()
+	ctx := testlog.WithTB(context.Background(), t)
 	client := DockerClient()
 	cd := &ContainerDefinition{
 		Image:   "alpine:latest",
@@ -116,14 +123,14 @@ func TestNewServiceContextWithContainerTimeout(t *testing.T) {
 		t.Errorf("Expected timeout standing up container: %v", err)
 	}
 
-	err = sc.TearDown()
+	err = sc.TearDown(ctx)
 	if err != nil {
 		t.Errorf("Error tearing down network: %v", err)
 	}
 }
 
 func TestUpload(t *testing.T) {
-	ctx := context.Background()
+	ctx := testlog.WithTB(context.Background(), t)
 	client := DockerClient()
 	err := PullImageIfNotHere(ctx, client, &testLogWriter{logger: t}, &ContainerDefinition{
 		Image: "hello-world",
@@ -193,7 +200,7 @@ func TestUpload(t *testing.T) {
 }
 
 func TestSquashImage(t *testing.T) {
-	ctx := context.Background()
+	ctx := testlog.WithTB(context.Background(), t)
 	client := DockerClient()
 	const (
 		repo  = "yourbase-layer-test"
@@ -224,7 +231,7 @@ func TestSquashImage(t *testing.T) {
 
 	t.Logf("Pre layer count: %d", layers)
 
-	err = SquashImage(context.Background(), client, repo, tag)
+	err = SquashImage(ctx, client, repo, tag)
 	if err != nil {
 		t.Errorf("SquashImage failed: %v", err)
 	}
