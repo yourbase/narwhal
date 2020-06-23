@@ -7,7 +7,7 @@ import (
 	"net"
 	"time"
 
-	docker "github.com/johnewart/go-dockerclient"
+	docker "github.com/fsouza/go-dockerclient"
 	"github.com/yourbase/narwhal/internal/xcontext"
 	"zombiezen.com/go/log"
 )

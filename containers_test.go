@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	docker "github.com/fsouza/go-dockerclient"
 	"github.com/google/go-cmp/cmp"
-	docker "github.com/johnewart/go-dockerclient"
 	"zombiezen.com/go/log/testlog"
 )
 
@@ -28,6 +28,45 @@ Tests for:
 func TestMain(m *testing.M) {
 	testlog.Main(nil)
 	os.Exit(m.Run())
+}
+
+func TestExecExitError(t *testing.T) {
+	ctx := testlog.WithTB(context.Background(), t)
+	client := DockerClient()
+	container, err := client.CreateContainer(docker.CreateContainerOptions{
+		Config: &docker.Config{
+			Image: "yourbase/yb_ubuntu:18.04",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmdStat := "stat /somewhere/strange/that/do/not/exist"
+	err = ExecShell(ctx, client, container.ID, cmdStat, &ExecShellOptions{
+		Interactive: true,
+	})
+	if err != nil {
+		if code, ok := IsExitError(err); !ok {
+			t.Errorf("Exit code: want 1, got %d", code)
+		}
+	} else {
+		t.Error("Expecting an error, but none was returned")
+	}
+
+	// Should have the "-p" flag
+	cmdMkdir := "mkdir /somewhere/strange/that/do/not/exist"
+	err = ExecShell(ctx, client, container.ID, cmdMkdir, &ExecShellOptions{
+		Interactive: true,
+	})
+	if err != nil {
+		if code, ok := IsExitError(err); !ok {
+			t.Errorf("Exit code: want 1, got %d", code)
+		}
+	} else {
+		t.Error("Expecting an error, but none was returned")
+	}
+
 }
 
 func TestSanitizeContainerName(t *testing.T) {
