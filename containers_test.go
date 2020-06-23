@@ -34,10 +34,29 @@ func TestExecExitError(t *testing.T) {
 	ctx := testlog.WithTB(context.Background(), t)
 	client := DockerClient()
 	container, err := client.CreateContainer(docker.CreateContainerOptions{
+		Name: "narwhal-exec-exit-error",
 		Config: &docker.Config{
 			Image: "yourbase/yb_ubuntu:18.04",
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		err := client.StopContainerWithContext(container.ID, 2, ctx)
+		if err != nil {
+			t.Logf("stopping container %s: %v", container.ID, err)
+		}
+		err = client.RemoveContainer(docker.RemoveContainerOptions{
+			ID:      container.ID,
+			Context: ctx,
+		})
+		if err != nil {
+			t.Logf("removing container %s: %v", container.ID, err)
+		}
+	}()
+
+	err = StartContainer(ctx, client, container.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +79,8 @@ func TestExecExitError(t *testing.T) {
 		Interactive: true,
 	})
 	if err != nil {
-		if code, ok := IsExitError(err); !ok {
-			t.Errorf("Exit code: want 1, got %d", code)
+		if code, ok := IsExitError(err); !ok || code != 1 {
+			t.Errorf("error = %v; want exit code 1", err)
 		}
 	} else {
 		t.Error("Expecting an error, but none was returned")
