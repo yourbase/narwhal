@@ -297,24 +297,24 @@ func BuildImageWithArchive(ctx context.Context, client *docker.Client, pullOutpu
 		return fmt.Errorf("Error pulling image (%s): %v", cd.Image, err)
 	}
 
-	container, err := newContainer(ctx, client, pullOutput, cd)
+	containerID, err := CreateContainer(ctx, client, pullOutput, cd)
 	if err != nil {
 		return fmt.Errorf("Error creating container: %v", err)
 	}
 	defer func() {
-		if err := RemoveContainerAndVolumes(ctx, client, container.Id); err != nil {
+		if err := RemoveContainerAndVolumes(ctx, client, containerID); err != nil {
 			log.Errorf(ctx, "Unable to destroy temporary container: %v", err)
 		}
 	}()
 
-	err = uploadArchive(ctx, client, container.Id, localFile, remotePath)
+	err = uploadArchive(ctx, client, containerID, localFile, remotePath)
 	if err != nil {
 		return fmt.Errorf("Error uploading file: %v", err)
 	}
 
 	_, err = client.CommitContainer(docker.CommitContainerOptions{
 		Context:    ctx,
-		Container:  container.Id,
+		Container:  containerID,
 		Repository: repository,
 		Tag:        tag,
 	})
@@ -553,27 +553,27 @@ func IsExitError(e error) (code int, ok bool) {
 	return int(ee), ok
 }
 
-func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writer, containerDef *ContainerDefinition) (*Container, error) {
+// CreateContainer creates a new container from the provided definition.
+func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.Writer, containerDef *ContainerDefinition) (id string, _ error) {
 	if containerDef.Image == "" {
 		containerDef.Image = "yourbase/yb_ubuntu:18.04"
 	}
 
 	containerName := containerDef.containerName()
-	log.Infof(ctx, "Creating container '%s'", containerName)
+	log.Debugf(ctx, "Creating container '%s'", containerName)
 
 	if err := PullImageIfNotHere(ctx, client, pullOutput, containerDef, docker.AuthConfiguration{}); err != nil {
-		return nil, err
+		return "", err
 	}
 
 	mounts, err := containerDef.DockerMounts()
-
 	if err != nil {
-		return nil, fmt.Errorf("invalid mounts: %w", err)
+		return "", fmt.Errorf("create container %s: mounts: %w", containerName, err)
 	}
 
-	var ports = make([]string, 0)
-	var bindings = make(map[docker.Port][]docker.PortBinding)
-	var exposedPorts = make(map[docker.Port]struct{})
+	var ports []string
+	bindings := make(map[docker.Port][]docker.PortBinding)
+	exposedPorts := make(map[docker.Port]struct{})
 
 	if len(containerDef.Ports) > 0 {
 		log.Infof(ctx, "Will map the following ports: ")
@@ -590,16 +590,14 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 				internalPort = protoParts[0]
 			}
 
-			portStr := fmt.Sprintf("%s/tcp", internalPort)
-			portKey := docker.Port(portStr)
-			ports = append(ports, portStr)
-
-			log.Infof(ctx, "  * %s -> %s/%s in container", externalPort, internalPort, protocol)
-			var pb = make([]docker.PortBinding, 0)
-			pb = append(pb, docker.PortBinding{HostIP: "0.0.0.0", HostPort: externalPort})
-			bindings[portKey] = pb
-			var s struct{}
-			exposedPorts[portKey] = s
+			log.Debugf(ctx, "  * %s -> %s/%s in container", externalPort, internalPort, protocol)
+			portKey := docker.Port(internalPort + "/tcp")
+			ports = append(ports, string(portKey))
+			bindings[portKey] = append(bindings[portKey], docker.PortBinding{
+				HostIP:   "0.0.0.0",
+				HostPort: externalPort,
+			})
+			exposedPorts[portKey] = struct{}{}
 		}
 	}
 
@@ -610,20 +608,17 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 			log.Infof(ctx, "Port wait check on port %d; finding free local port...", checkPort)
 			localPort, err := findFreePort()
 			if err != nil {
-				return nil, fmt.Errorf("find free TCP port to forward from: %w", err)
+				return "", fmt.Errorf("create container %s: find free TCP port to forward from: %w", containerName, err)
 			}
 			log.Infof(ctx, "Mapping %d locally to %d in the container.", localPort, checkPort)
 			containerDef.PortWaitCheck.LocalPortMap = localPort
-			pstr := fmt.Sprintf("%d/tcp", checkPort)
-			pkey := docker.Port(pstr)
-			localPortString := fmt.Sprintf("%d", localPort)
-			pb := []docker.PortBinding{
-				{HostIP: "127.0.0.1", HostPort: localPortString},
-			}
-			bindings[pkey] = pb
-			var s struct{}
-			exposedPorts[pkey] = s
-			ports = append(ports, pstr)
+			portKey := docker.Port(strconv.Itoa(checkPort) + "/tcp")
+			ports = append(ports, string(portKey))
+			bindings[portKey] = append(bindings[portKey], docker.PortBinding{
+				HostIP:   "127.0.0.1",
+				HostPort: strconv.Itoa(localPort),
+			})
+			exposedPorts[portKey] = struct{}{}
 		}
 	}
 
@@ -655,18 +650,12 @@ func newContainer(ctx context.Context, client *docker.Client, pullOutput io.Writ
 		Config:     &config,
 		HostConfig: &hostConfig,
 	})
-
 	if err != nil {
-		return nil, fmt.Errorf("Failed to create container: %v", err)
+		return "", fmt.Errorf("create container %s: %v", containerName, err)
 	}
 
-	log.Debugf(ctx, "Found container ID: %s", container.ID)
-
-	return &Container{
-		Name:       containerName,
-		Id:         container.ID,
-		Definition: *containerDef,
-	}, nil
+	log.Debugf(ctx, "Created container ID: %s", container.ID)
+	return container.ID, nil
 }
 
 func findFreePort() (int, error) {
