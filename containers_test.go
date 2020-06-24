@@ -119,8 +119,8 @@ func TestNewServiceContextWithContainerTimeout(t *testing.T) {
 		t.Fatalf("Error creating context: %v", err)
 	}
 
-	if _, err := sc.StartContainer(ctx, &testLogWriter{logger: t}, cd); err != nil {
-		t.Errorf("Expected timeout standing up container: %v", err)
+	if _, err := sc.StartContainer(ctx, &testLogWriter{logger: t}, cd); err == nil {
+		t.Error("Expected timeout standing up container")
 	}
 
 	err = sc.TearDown(ctx)
