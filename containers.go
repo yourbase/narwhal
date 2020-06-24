@@ -378,7 +378,8 @@ func IsRunning(ctx context.Context, client *docker.Client, containerID string) (
 
 // UploadFile sends the content of localFile (a host filesystem path) into
 // remotePath (a path to a directory inside the container) with the given
-// fileName.
+// fileName. The parent directory is created if it does not exist. remotePath
+// must be absolute.
 func UploadFile(ctx context.Context, client *docker.Client, containerID string, remotePath string, localPath string) error {
 	f, err := os.Open(localPath)
 	if err != nil {
@@ -397,8 +398,12 @@ func UploadFile(ctx context.Context, client *docker.Client, containerID string, 
 }
 
 // Upload writes the given content to a path inside the container. header.Name
-// is entirely ignored.
+// is entirely ignored. The parent directory is created if it does not exist.
+// remotePath must be absolute.
 func Upload(ctx context.Context, client *docker.Client, containerID string, remotePath string, content io.Reader, header *tar.Header) error {
+	if !slashpath.IsAbs(remotePath) {
+		return fmt.Errorf("upload file to container: path %q is not absolute", remotePath)
+	}
 	tmpFile, err := ioutil.TempFile("", "yb*.tar")
 	if err != nil {
 		return fmt.Errorf("upload file to container: %w", err)
@@ -409,10 +414,10 @@ func Upload(ctx context.Context, client *docker.Client, containerID string, remo
 		os.Remove(name)
 	}()
 
-	remoteDir, remoteBase := slashpath.Split(remotePath)
 	realHeader := new(tar.Header)
 	*realHeader = *header
-	realHeader.Name = remoteBase
+	// Trim leading slashes.
+	realHeader.Name = strings.TrimLeft(slashpath.Clean(remotePath), "/")
 	if err := archiveFile(tmpFile, content, realHeader); err != nil {
 		return fmt.Errorf("upload file to container: %w", err)
 	}
@@ -422,7 +427,7 @@ func Upload(ctx context.Context, client *docker.Client, containerID string, remo
 	}
 	err = client.UploadToContainer(containerID, docker.UploadToContainerOptions{
 		InputStream:          tmpFile,
-		Path:                 remoteDir,
+		Path:                 "/",
 		NoOverwriteDirNonDir: true,
 	})
 	if err != nil {
@@ -433,6 +438,19 @@ func Upload(ctx context.Context, client *docker.Client, containerID string, remo
 
 func archiveFile(tf io.Writer, source io.Reader, header *tar.Header) error {
 	w := tar.NewWriter(tf)
+	if dir := slashpath.Dir(header.Name); dir != "" {
+		parents := strings.Split(dir, "/")
+		for i := range parents {
+			err := w.WriteHeader(&tar.Header{
+				Typeflag: tar.TypeDir,
+				Name:     strings.Join(parents[:i+1], "/"),
+				Mode:     0755,
+			})
+			if err != nil {
+				return err
+			}
+		}
+	}
 	if err := w.WriteHeader(header); err != nil {
 		return err
 	}
