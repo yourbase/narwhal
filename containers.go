@@ -501,6 +501,9 @@ type ExecShellOptions struct {
 	// If Interactive is true, then stdio from this exec is attached to the stdio
 	// of the running process.
 	Interactive bool
+
+	// If IgnoreResults is true, then no output will be watched and no exit code would emerge
+	IgnoreResults bool
 }
 
 // ExecShell executes a bash shell command inside a container. If the process
@@ -509,6 +512,11 @@ type ExecShellOptions struct {
 func ExecShell(ctx context.Context, client *docker.Client, containerID string, cmdString string, opts *ExecShellOptions) error {
 	if opts == nil {
 		opts = new(ExecShellOptions)
+	}
+
+	// If the caller expects a result, we need to at least attach an IO discarding type
+	if opts.CombinedOutput == nil && !opts.IgnoreResults {
+		opts.CombinedOutput = ioutil.Discard
 	}
 
 	execOpts := docker.CreateExecOptions{

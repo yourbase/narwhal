@@ -66,9 +66,7 @@ func TestExecExitError(t *testing.T) {
 	}
 
 	cmdStat := "stat /somewhere/strange/that/do/not/exist"
-	err = ExecShell(ctx, client, containerID, cmdStat, &ExecShellOptions{
-		CombinedOutput: os.Stdout,
-	})
+	err = ExecShell(ctx, client, containerID, cmdStat, &ExecShellOptions{})
 	if err != nil {
 		if code, ok := IsExitError(err); !ok || code != 1 {
 			t.Errorf("error = %v; want exit code 1", err)
@@ -79,9 +77,7 @@ func TestExecExitError(t *testing.T) {
 
 	// Should have the "-p" flag
 	cmdMkdir := "mkdir /somewhere/strange/that/do/not/exist"
-	err = ExecShell(ctx, client, containerID, cmdMkdir, &ExecShellOptions{
-		CombinedOutput: os.Stdout,
-	})
+	err = ExecShell(ctx, client, containerID, cmdMkdir, &ExecShellOptions{})
 	if err != nil {
 		if code, ok := IsExitError(err); !ok || code != 1 {
 			t.Errorf("error = %v; want exit code 1", err)
