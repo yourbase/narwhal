@@ -3,11 +3,10 @@ module github.com/yourbase/narwhal
 require (
 	github.com/Microsoft/hcsshim v0.8.9 // indirect
 	github.com/containerd/containerd v1.3.4 // indirect
-	github.com/fsouza/go-dockerclient v1.6.0 // indirect
+	github.com/fsouza/go-dockerclient v1.6.0
 	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/google/go-cmp v0.4.1
 	github.com/heroku/docker-registry-client v0.0.0-20190909225348-afc9e1acc3d5
-	github.com/johnewart/go-dockerclient v1.3.7
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sirupsen/logrus v1.6.0

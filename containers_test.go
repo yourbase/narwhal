@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	docker "github.com/fsouza/go-dockerclient"
 	"github.com/google/go-cmp/cmp"
-	docker "github.com/johnewart/go-dockerclient"
 	"zombiezen.com/go/log/testlog"
 )
 
@@ -28,6 +28,68 @@ Tests for:
 func TestMain(m *testing.M) {
 	testlog.Main(nil)
 	os.Exit(m.Run())
+}
+
+func TestExecExitError(t *testing.T) {
+	ctx := testlog.WithTB(context.Background(), t)
+	client := DockerClient()
+	containerID, err := CreateContainer(ctx, client, os.Stdout, &ContainerDefinition{
+		Label:   "narwhal-exec-exit-error",
+		Image:   "yourbase/yb_ubuntu:18.04",
+		Command: "/usr/bin/tail -f /dev/null",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		err := client.StopContainerWithContext(containerID, 2, ctx)
+		if err != nil {
+			t.Logf("stopping container %s: %v", containerID, err)
+		}
+		err = client.RemoveContainer(docker.RemoveContainerOptions{
+			ID:      containerID,
+			Context: ctx,
+		})
+		if err != nil {
+			t.Logf("removing container %s: %v", containerID, err)
+		}
+	}()
+
+	err = StartContainer(ctx, client, containerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if running, err := IsRunning(ctx, client, containerID); !running {
+		t.Fatalf("Container %s didn't start, but should have, as StartContainer was called:\n%v", containerID, err)
+	}
+
+	cmdStat := "stat /somewhere/strange/that/do/not/exist"
+	err = ExecShell(ctx, client, containerID, cmdStat, &ExecShellOptions{
+		CombinedOutput: os.Stdout,
+	})
+	if err != nil {
+		if code, ok := IsExitError(err); !ok || code != 1 {
+			t.Errorf("error = %v; want exit code 1", err)
+		}
+	} else {
+		t.Error("Expecting an error, but none was returned")
+	}
+
+	// Should have the "-p" flag
+	cmdMkdir := "mkdir /somewhere/strange/that/do/not/exist"
+	err = ExecShell(ctx, client, containerID, cmdMkdir, &ExecShellOptions{
+		CombinedOutput: os.Stdout,
+	})
+	if err != nil {
+		if code, ok := IsExitError(err); !ok || code != 1 {
+			t.Errorf("error = %v; want exit code 1", err)
+		}
+	} else {
+		t.Error("Expecting an error, but none was returned")
+	}
+
 }
 
 func TestSanitizeContainerName(t *testing.T) {
