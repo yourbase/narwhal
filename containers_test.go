@@ -67,23 +67,17 @@ func TestExecExitError(t *testing.T) {
 
 	cmdStat := "stat /somewhere/strange/that/do/not/exist"
 	err = ExecShell(ctx, client, containerID, cmdStat, &ExecShellOptions{})
-	if err != nil {
-		if code, ok := IsExitError(err); !ok || code != 1 {
-			t.Errorf("error = %v; want exit code 1", err)
-		}
-	} else {
-		t.Error("Expecting an error, but none was returned")
+	if code, ok := IsExitError(err); !ok || code != 1 {
+		t.Logf("is it exit error? %v", ok)
+		t.Errorf("error = %v; want exit code 1, got %d", err, code)
 	}
 
 	// Should have the "-p" flag
 	cmdMkdir := "mkdir /somewhere/strange/that/do/not/exist"
 	err = ExecShell(ctx, client, containerID, cmdMkdir, &ExecShellOptions{})
-	if err != nil {
-		if code, ok := IsExitError(err); !ok || code != 1 {
-			t.Errorf("error = %v; want exit code 1", err)
-		}
-	} else {
-		t.Error("Expecting an error, but none was returned")
+	if code, ok := IsExitError(err); !ok || code != 1 {
+		t.Logf("is it exit error? %v", ok)
+		t.Errorf("error = %v; want exit code 1, got %d", err, code)
 	}
 
 }

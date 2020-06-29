@@ -501,9 +501,6 @@ type ExecShellOptions struct {
 	// If Interactive is true, then stdio from this exec is attached to the stdio
 	// of the running process.
 	Interactive bool
-
-	// If IgnoreResults is true, then no output will be watched and no exit code would emerge
-	IgnoreResults bool
 }
 
 // ExecShell executes a bash shell command inside a container. If the process
@@ -514,18 +511,13 @@ func ExecShell(ctx context.Context, client *docker.Client, containerID string, c
 		opts = new(ExecShellOptions)
 	}
 
-	// If the caller expects a result, we need to at least attach an IO discarding type
-	if opts.CombinedOutput == nil && !opts.IgnoreResults {
-		opts.CombinedOutput = ioutil.Discard
-	}
-
 	execOpts := docker.CreateExecOptions{
 		Context:      ctx,
 		Env:          opts.Env,
 		Cmd:          []string{"bash", "-c", cmdString},
 		AttachStdin:  opts.Interactive,
-		AttachStdout: opts.Interactive || opts.CombinedOutput != nil,
-		AttachStderr: opts.Interactive || opts.CombinedOutput != nil,
+		AttachStdout: true,
+		AttachStderr: true,
 		Tty:          opts.Interactive,
 		Container:    containerID,
 		WorkingDir:   opts.Dir,
@@ -550,6 +542,12 @@ func ExecShell(ctx context.Context, client *docker.Client, containerID string, c
 		startOpts.OutputStream = opts.CombinedOutput
 		startOpts.ErrorStream = opts.CombinedOutput
 	}
+
+	if opts.CombinedOutput == nil {
+		startOpts.OutputStream = ioutil.Discard
+		startOpts.ErrorStream = ioutil.Discard
+	}
+
 	err = client.StartExec(exec.ID, startOpts)
 	if err != nil {
 		return fmt.Errorf("execute shell command in container %s: %w", containerID, err)
