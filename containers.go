@@ -516,8 +516,8 @@ func ExecShell(ctx context.Context, client *docker.Client, containerID string, c
 		Env:          opts.Env,
 		Cmd:          []string{"bash", "-c", cmdString},
 		AttachStdin:  opts.Interactive,
-		AttachStdout: opts.Interactive || opts.CombinedOutput != nil,
-		AttachStderr: opts.Interactive || opts.CombinedOutput != nil,
+		AttachStdout: true,
+		AttachStderr: true,
 		Tty:          opts.Interactive,
 		Container:    containerID,
 		WorkingDir:   opts.Dir,
@@ -542,6 +542,12 @@ func ExecShell(ctx context.Context, client *docker.Client, containerID string, c
 		startOpts.OutputStream = opts.CombinedOutput
 		startOpts.ErrorStream = opts.CombinedOutput
 	}
+
+	if opts.CombinedOutput == nil {
+		startOpts.OutputStream = ioutil.Discard
+		startOpts.ErrorStream = ioutil.Discard
+	}
+
 	err = client.StartExec(exec.ID, startOpts)
 	if err != nil {
 		return fmt.Errorf("execute shell command in container %s: %w", containerID, err)
