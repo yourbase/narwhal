@@ -366,11 +366,11 @@ func StartContainer(ctx context.Context, client *docker.Client, containerID stri
 	return client.StartContainerWithContext(containerID, &docker.HostConfig{}, ctx)
 }
 
-// IsRunning check if a container is running by it's ID
+// IsRunning check if a container is running by its ID
 func IsRunning(ctx context.Context, client *docker.Client, containerID string) (bool, error) {
 	c, err := client.InspectContainerWithContext(containerID, ctx)
 	if err != nil {
-		return false, fmt.Errorf("Couldn't determine state of container %s: %v", containerID, err)
+		return false, fmt.Errorf("determining state of container %s: %v", containerID, err)
 	}
 
 	return c.State.Running, nil
@@ -444,7 +444,8 @@ func archiveFile(tf io.Writer, source io.Reader, header *tar.Header) error {
 			err := w.WriteHeader(&tar.Header{
 				Typeflag: tar.TypeDir,
 				Name:     strings.Join(parents[:i+1], "/"),
-				Mode:     0755,
+				// NOTE I'm not entirely sure, but this should be making /tmp not 1777, when it should
+				Mode: 0755,
 			})
 			if err != nil {
 				return err
