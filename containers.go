@@ -444,8 +444,7 @@ func archiveFile(tf io.Writer, source io.Reader, header *tar.Header) error {
 			err := w.WriteHeader(&tar.Header{
 				Typeflag: tar.TypeDir,
 				Name:     strings.Join(parents[:i+1], "/"),
-				// NOTE I'm not entirely sure, but this should be making /tmp not 1777, when it should
-				Mode: 0755,
+				Mode:     0755,
 			})
 			if err != nil {
 				return err
