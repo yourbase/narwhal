@@ -464,15 +464,25 @@ func archiveFile(tf io.Writer, source io.Reader, header *tar.Header) error {
 }
 
 // MkdirAll ensures that the given directory and all its parents directories
-// exist.
+// exist. As root
 func MkdirAll(ctx context.Context, client *docker.Client, containerID string, path string) error {
-	exec, err := client.CreateExec(docker.CreateExecOptions{
+	return MkdirAllOwnedBy(ctx, client, containerID, path, "", "")
+}
+
+// MkdirAllOwnedBy ensures that the given directory and all its parents directories
+// exist. As an user defined by uid and gid
+func MkdirAllOwnedBy(ctx context.Context, client *docker.Client, containerID string, path string, uid string, gid string) error {
+	opts := docker.CreateExecOptions{
 		Context:      ctx,
 		Cmd:          []string{"mkdir", "-p", path},
 		AttachStdout: true,
 		AttachStderr: true,
 		Container:    containerID,
-	})
+	}
+	if uid != "" || gid != "" {
+		opts.User = uid + ":" + gid
+	}
+	exec, err := client.CreateExec(opts)
 	if err != nil {
 		return fmt.Errorf("mkdir %q in container %q: %w", path, containerID, err)
 	}
