@@ -20,8 +20,8 @@ import (
 	"sync"
 
 	docker "github.com/fsouza/go-dockerclient"
+	"github.com/yourbase/commons/xcontext"
 	"github.com/yourbase/narwhal/internal/imageref"
-	"github.com/yourbase/narwhal/internal/xcontext"
 	"zombiezen.com/go/log"
 )
 
@@ -797,7 +797,7 @@ func imageToTar(ctx context.Context, imageId string) (string, error) {
 		if err := client.RemoveContainer(docker.RemoveContainerOptions{
 			ID:            container.ID,
 			RemoveVolumes: true,
-			Context:       xcontext.Detach(ctx),
+			Context:       xcontext.IgnoreDeadline(ctx),
 		}); err != nil {
 			log.Infof(ctx, "unable to remove container: %v", err)
 		}
