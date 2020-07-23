@@ -8,7 +8,7 @@ import (
 	"time"
 
 	docker "github.com/fsouza/go-dockerclient"
-	"github.com/yourbase/narwhal/internal/xcontext"
+	"github.com/yourbase/commons/xcontext"
 	"zombiezen.com/go/log"
 )
 
@@ -70,7 +70,7 @@ func (sc *ServiceContext) FindContainer(ctx context.Context, cd *ContainerDefini
 }
 
 func (sc *ServiceContext) TearDown(ctx context.Context) error {
-	ctx = xcontext.Detach(ctx)
+	ctx = xcontext.IgnoreDeadline(ctx)
 	log.Infof(ctx, "Terminating containers...")
 
 	for i := range sc.ContainerDefinitions {
@@ -144,7 +144,7 @@ func (sc *ServiceContext) FindOrCreate(ctx context.Context, pullOutput io.Writer
 	}
 	if err := sc.DockerClient.ConnectNetwork(sc.NetworkId, opts); err != nil {
 		rmErr := sc.DockerClient.RemoveContainer(docker.RemoveContainerOptions{
-			Context: xcontext.Detach(ctx),
+			Context: xcontext.IgnoreDeadline(ctx),
 			ID:      containerID,
 		})
 		if rmErr != nil {
@@ -168,7 +168,7 @@ func (sc *ServiceContext) StartContainer(ctx context.Context, pullOutput io.Writ
 	defer func() {
 		if err != nil {
 			rmErr := sc.DockerClient.RemoveContainer(docker.RemoveContainerOptions{
-				Context: xcontext.Detach(ctx),
+				Context: xcontext.IgnoreDeadline(ctx),
 				ID:      container.Id,
 				Force:   true,
 			})
