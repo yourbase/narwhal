@@ -551,9 +551,8 @@ func ExecShell(ctx context.Context, client *docker.Client, containerID string, c
 	case opts.CombinedOutput != nil:
 		startOpts.OutputStream = opts.CombinedOutput
 		startOpts.ErrorStream = opts.CombinedOutput
-	}
-
-	if opts.CombinedOutput == nil {
+	default:
+		// Workaround for https://github.com/fsouza/go-dockerclient/issues/838
 		startOpts.OutputStream = ioutil.Discard
 		startOpts.ErrorStream = ioutil.Discard
 	}
