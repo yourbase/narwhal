@@ -1,6 +1,6 @@
 # Narwhal!
 
-[![GoDoc shield](https://raw.githubusercontent.com/golang/gddo/c782c79e0a3c3282dacdaaebeff9e6fd99cb2919/gddo-server/assets/status.svg)][docs]
+[![Go Reference](https://pkg.go.dev/badge/github.com/yourbase/narwhal?tab=doc)](https://pkg.go.dev/github.com/yourbase/narwhal?tab=doc)
 
 Narwhal is a Go API for Docker and Docker containers.
 
