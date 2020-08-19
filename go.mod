@@ -3,6 +3,7 @@ module github.com/yourbase/narwhal
 require (
 	github.com/Microsoft/hcsshim v0.8.9 // indirect
 	github.com/containerd/containerd v1.3.4 // indirect
+	github.com/docker/distribution v2.7.1+incompatible
 	github.com/fsouza/go-dockerclient v1.6.0
 	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/google/go-cmp v0.4.1

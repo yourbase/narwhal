@@ -28,18 +28,12 @@ func ExampleCreateContainer() {
 		fmt.Println(err)
 		return
 	}
+	fmt.Println("Container created!")
+
 	defer narwhal.RemoveContainerAndVolumes(ctx, client, containerID)
 
-	err = narwhal.RemoveContainerAndVolumes(ctx, client, containerID)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	fmt.Println("Container removed!")
-
 	// Output:
-	// Container removed!
+	// Container created!
 }
 
 func ExampleStartContainer() {
