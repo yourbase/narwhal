@@ -61,8 +61,9 @@ type ContainerDefinition struct {
 	Mounts        []string `yaml:"mounts"`
 	Ports         []string `yaml:"ports"`
 	Environment   []string `yaml:"environment"`
-	Command       string   `yaml:"command"`
-	WorkDir       string   `yaml:"workdir"`
+	Argv          []string
+	Command       string `yaml:"command"` // deprecated: use Argv
+	WorkDir       string `yaml:"workdir"`
 	Privileged    bool
 	PortWaitCheck PortWaitCheck `yaml:"port_check"`
 	Label         string        `yaml:"label"`
@@ -591,6 +592,9 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 	if containerDef.Image == "" {
 		containerDef.Image = "yourbase/yb_ubuntu:18.04"
 	}
+	if len(containerDef.Argv) > 0 && containerDef.Command != "" {
+		return "", fmt.Errorf("create container: both Argv and Command specified")
+	}
 
 	containerName := containerDef.containerName()
 	log.Debugf(ctx, "Creating container '%s'", containerName)
@@ -670,7 +674,9 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 		ExposedPorts: exposedPorts,
 	}
 
-	if len(containerDef.Command) > 0 {
+	if len(containerDef.Argv) > 0 {
+		config.Cmd = containerDef.Argv
+	} else if len(containerDef.Command) > 0 {
 		cmd := containerDef.Command
 		log.Debugf(ctx, "Will run %s in the container", cmd)
 		cmdParts := strings.Split(cmd, " ")
