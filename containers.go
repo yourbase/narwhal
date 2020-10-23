@@ -405,7 +405,6 @@ func Upload(ctx context.Context, client *docker.Client, containerID string, remo
 	}
 	realHeader := new(tar.Header)
 	*realHeader = *header
-	// Trim leading slashes.
 	var dir string
 	dir, realHeader.Name = slashpath.Split(remotePath)
 
