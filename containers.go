@@ -3,7 +3,6 @@ package narwhal
 
 import (
 	"archive/tar"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -404,6 +403,15 @@ func Upload(ctx context.Context, client *docker.Client, containerID string, remo
 	if !slashpath.IsAbs(remotePath) {
 		return fmt.Errorf("upload file to container: path %q is not absolute", remotePath)
 	}
+	realHeader := new(tar.Header)
+	*realHeader = *header
+	var dir string
+	dir, realHeader.Name = slashpath.Split(remotePath)
+
+	if err := MkdirAll(ctx, client, containerID, dir, nil); err != nil {
+		return fmt.Errorf("upload file to container: %w", err)
+	}
+
 	tmpFile, err := ioutil.TempFile("", "yb*.tar")
 	if err != nil {
 		return fmt.Errorf("upload file to container: %w", err)
@@ -414,10 +422,6 @@ func Upload(ctx context.Context, client *docker.Client, containerID string, remo
 		os.Remove(name)
 	}()
 
-	realHeader := new(tar.Header)
-	*realHeader = *header
-	// Trim leading slashes.
-	realHeader.Name = strings.TrimLeft(slashpath.Clean(remotePath), "/")
 	if err := archiveFile(tmpFile, content, realHeader); err != nil {
 		return fmt.Errorf("upload file to container: %w", err)
 	}
@@ -427,7 +431,7 @@ func Upload(ctx context.Context, client *docker.Client, containerID string, remo
 	}
 	err = client.UploadToContainer(containerID, docker.UploadToContainerOptions{
 		InputStream:          tmpFile,
-		Path:                 "/",
+		Path:                 dir,
 		NoOverwriteDirNonDir: true,
 	})
 	if err != nil {
@@ -459,43 +463,6 @@ func archiveFile(tf io.Writer, source io.Reader, header *tar.Header) error {
 	}
 	if err := w.Close(); err != nil {
 		return err
-	}
-	return nil
-}
-
-// MkdirAll ensures that the given directory and all its parents directories
-// exist. As root
-func MkdirAll(ctx context.Context, client *docker.Client, containerID string, path string) error {
-	return MkdirAllOwnedBy(ctx, client, containerID, path, "", "")
-}
-
-// MkdirAllOwnedBy ensures that the given directory and all its parents directories
-// exist. As an user defined by uid and gid
-func MkdirAllOwnedBy(ctx context.Context, client *docker.Client, containerID string, path string, uid string, gid string) error {
-	opts := docker.CreateExecOptions{
-		Context:      ctx,
-		Cmd:          []string{"mkdir", "-p", path},
-		AttachStdout: true,
-		AttachStderr: true,
-		Container:    containerID,
-	}
-	if uid != "" || gid != "" {
-		opts.User = uid + ":" + gid
-	}
-	exec, err := client.CreateExec(opts)
-	if err != nil {
-		return fmt.Errorf("mkdir %q in container %q: %w", path, containerID, err)
-	}
-	out := new(bytes.Buffer)
-	err = client.StartExec(exec.ID, docker.StartExecOptions{
-		OutputStream: out,
-		ErrorStream:  out,
-	})
-	if err != nil {
-		if out.Len() > 0 {
-			return fmt.Errorf("mkdir %q in container %q: %w\n%s", path, containerID, err, out)
-		}
-		return fmt.Errorf("mkdir %q in container %q: %w", path, containerID, err)
 	}
 	return nil
 }
