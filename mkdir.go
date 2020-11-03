@@ -20,10 +20,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	slashpath "path"
 	"strings"
@@ -58,25 +55,26 @@ func MkdirAll(ctx context.Context, client *docker.Client, containerID string, pa
 	}
 	parts := strings.Split(cleanedPath, "/")
 
-	// Find deepest directory that exists. Searching in reverse because stat will
-	// download a whole directory tree.
+	// Find deepest directory that exists by trying to extract an empty tar
+	// archive at each level.
 	start := len(parts)
+	emptyTarBytes := emptyTar()
 	for ; start > 0; start-- {
 		elem := "/" + strings.Join(parts[:start], "/")
-		hdr, err := stat(ctx, client, containerID, elem)
+		err := client.UploadToContainer(containerID, docker.UploadToContainerOptions{
+			Context:     ctx,
+			InputStream: bytes.NewReader(emptyTarBytes),
+			Path:        elem,
+		})
 		if err == nil {
-			if hdr.Typeflag != tar.TypeDir {
-				return fmt.Errorf("mkdir -p %s: %s is not a directory", path, elem)
-			}
 			break
-		}
-		var dockerErr *docker.Error
-		if !(errors.As(err, &dockerErr) && dockerErr.Status == http.StatusNotFound) {
-			return fmt.Errorf("mkdir -p %s: %w", path, err)
 		}
 	}
 
 	// Now start creating directories.
+	if start == len(parts) {
+		return nil
+	}
 	dir := "/" + strings.Join(parts[:start], "/")
 	err := client.UploadToContainer(containerID, docker.UploadToContainerOptions{
 		Context:              ctx,
@@ -88,42 +86,6 @@ func MkdirAll(ctx context.Context, client *docker.Client, containerID string, pa
 		return fmt.Errorf("mkdir -p %s: %w", path, err)
 	}
 	return nil
-}
-
-func stat(ctx context.Context, client *docker.Client, containerID string, path string) (*tar.Header, error) {
-	// TODO(light): There is a more direct operation to stat
-	// (https://docs.docker.com/engine/api/v1.40/#operation/ContainerArchiveInfo),
-	// but the Docker client does not expose the operation nor the URL endpoint
-	// to implement ourselves.
-	pr, pw := io.Pipe()
-	type headerResult struct {
-		hdr *tar.Header
-		err error
-	}
-	headerChan := make(chan headerResult, 1)
-	go func() {
-		defer pr.Close()
-		tr := tar.NewReader(pr)
-		hdr, err := tr.Next()
-		headerChan <- headerResult{hdr, err}
-	}()
-	downloadErr := client.DownloadFromContainer(containerID, docker.DownloadFromContainerOptions{
-		Context:      ctx,
-		Path:         path,
-		OutputStream: pw,
-	})
-	pw.Close()
-	readResult := <-headerChan
-	// Errors from DownloadFromContainer are largely expected because we rudely
-	// close the stream to avoid wasting resources. However, if we weren't able
-	// to read the first tar entry, then something is probably amiss.
-	if readResult.err != nil {
-		if downloadErr != nil {
-			return nil, fmt.Errorf("stat %s: %w", path, downloadErr)
-		}
-		return nil, fmt.Errorf("stat %s: %w", path, readResult.err)
-	}
-	return readResult.hdr, nil
 }
 
 func directoryTar(parts []string, opts *MkdirOptions) []byte {
@@ -148,6 +110,15 @@ func directoryTar(parts []string, opts *MkdirOptions) []byte {
 			panic(err)
 		}
 	}
+	if err := tw.Close(); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+func emptyTar() []byte {
+	buf := new(bytes.Buffer)
+	tw := tar.NewWriter(buf)
 	if err := tw.Close(); err != nil {
 		panic(err)
 	}
