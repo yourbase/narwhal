@@ -381,6 +381,27 @@ func IsRunning(ctx context.Context, client *docker.Client, containerID string) (
 // fileName. The parent directory is created if it does not exist. remotePath
 // must be absolute.
 func UploadFile(ctx context.Context, client *docker.Client, containerID string, remotePath string, localPath string) error {
+	if err := MkdirAll(ctx, client, containerID, slashpath.Dir(remotePath), nil); err != nil {
+		return fmt.Errorf("upload file to container: %w", err)
+	}
+	return WriteFile(ctx, client, containerID, remotePath, localPath)
+}
+
+// Upload writes the given content to a path inside the container. header.Name
+// is entirely ignored. The parent directory is created if it does not exist.
+// remotePath must be absolute.
+func Upload(ctx context.Context, client *docker.Client, containerID string, remotePath string, content io.Reader, header *tar.Header) error {
+	if err := MkdirAll(ctx, client, containerID, slashpath.Dir(remotePath), nil); err != nil {
+		return fmt.Errorf("upload file to container: %w", err)
+	}
+	return Write(ctx, client, containerID, remotePath, content, header)
+}
+
+// WriteFile sends the content of localFile (a host filesystem path) into
+// remotePath (a path to a directory inside the container) with the given
+// fileName. The parent directory must exist or Write will return an error.
+// remotePath must be absolute.
+func WriteFile(ctx context.Context, client *docker.Client, containerID string, remotePath string, localPath string) error {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
@@ -394,13 +415,13 @@ func UploadFile(ctx context.Context, client *docker.Client, containerID string, 
 	if err != nil {
 		return err
 	}
-	return Upload(ctx, client, containerID, remotePath, f, header)
+	return Write(ctx, client, containerID, remotePath, f, header)
 }
 
-// Upload writes the given content to a path inside the container. header.Name
-// is entirely ignored. The parent directory is created if it does not exist.
-// remotePath must be absolute.
-func Upload(ctx context.Context, client *docker.Client, containerID string, remotePath string, content io.Reader, header *tar.Header) error {
+// Write writes the given content to a path inside the container. header.Name
+// is entirely ignored. The parent directory must exist or Write will return an
+// error. remotePath must be absolute.
+func Write(ctx context.Context, client *docker.Client, containerID string, remotePath string, content io.Reader, header *tar.Header) error {
 	if !slashpath.IsAbs(remotePath) {
 		return fmt.Errorf("upload file to container: path %q is not absolute", remotePath)
 	}
@@ -408,10 +429,6 @@ func Upload(ctx context.Context, client *docker.Client, containerID string, remo
 	*realHeader = *header
 	var dir string
 	dir, realHeader.Name = slashpath.Split(remotePath)
-
-	if err := MkdirAll(ctx, client, containerID, dir, nil); err != nil {
-		return fmt.Errorf("upload file to container: %w", err)
-	}
 
 	tmpFile, err := ioutil.TempFile("", "yb*.tar")
 	if err != nil {
