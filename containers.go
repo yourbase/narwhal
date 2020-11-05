@@ -624,8 +624,8 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 
 	if containerDef.PortWaitCheck.Port != 0 {
 		checkPort := containerDef.PortWaitCheck.Port
-		// Port wait check, need to map to localhost port if we're on Darwin (VM networking...)
-		if runtime.GOOS == "darwin" {
+		// Port wait check, need to map to localhost port if we're on Darwin or WSL2 (VM networking...)
+		if _, ok := docker0(ctx); !ok {
 			log.Infof(ctx, "Port wait check on port %d; finding free local port...", checkPort)
 			localPort, err := findFreePort()
 			if err != nil {
@@ -824,4 +824,25 @@ func imageId(repo, tag string) (string, error) {
 	}
 
 	return images[0].ID, nil
+}
+
+// docker0 returns the standard Docker network interface ("docker0" as reported
+// by ifconfig or brctl) and whether it exists on the host. This interface
+// serves as a network bridge between Docker containers.
+//
+// The interface will not be returned if it does not exist. This can happen if
+// Docker is not installed; or if the host is running macOS or WSL2, as in these
+// operating systems the bridge exists inside the VM and not on the host.
+func docker0(ctx context.Context) (net.Interface, bool) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		log.Warnf(ctx, "Cannot retrieve network interfaces: %w", err)
+		return net.Interface{}, false
+	}
+	for _, i := range interfaces {
+		if i.Name == "docker0" {
+			return i, true
+		}
+	}
+	return net.Interface{}, false
 }
