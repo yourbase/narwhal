@@ -623,9 +623,14 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 	}
 
 	if containerDef.PortWaitCheck.Port != 0 {
-		checkPort := containerDef.PortWaitCheck.Port
-		// Port wait check, need to map to localhost port if we're on Darwin or WSL2 (VM networking...)
-		if _, ok := docker0(ctx); !ok {
+		dockerNetworkExists, err := hostHasDockerNetwork()
+		if err != nil {
+			return "", fmt.Errorf("create container %s: checking for docker0: %w", containerName, err)
+		}
+
+		// Port wait check, need to map to localhost port if Docker isn't doing it for us
+		if !dockerNetworkExists {
+			checkPort := containerDef.PortWaitCheck.Port
 			log.Infof(ctx, "Port wait check on port %d; finding free local port...", checkPort)
 			localPort, err := findFreePort()
 			if err != nil {
@@ -826,23 +831,23 @@ func imageId(repo, tag string) (string, error) {
 	return images[0].ID, nil
 }
 
-// docker0 returns the standard Docker network interface ("docker0" as reported
-// by ifconfig or brctl) and whether it exists on the host. This interface
+// hostHasDockerNetwork returns true if the Docker network bridge ("docker0" as
+// reported by ifconfig and brctl) exists, or false otherwise. This interface
 // serves as a network bridge between Docker containers.
 //
-// The interface will not be returned if it does not exist. This can happen if
-// Docker is not installed; or if the host is running macOS or WSL2, as in these
-// operating systems the bridge exists inside the VM and not on the host.
-func docker0(ctx context.Context) (net.Interface, bool) {
+// Common reasons for the interface not existing are that Docker is not
+// installed, or that the host is running macOS or WSL2 (operating systems in
+// which Docker doesn't establish the bridge on the host).
+func hostHasDockerNetwork() (bool, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		log.Warnf(ctx, "Cannot retrieve network interfaces: %w", err)
-		return net.Interface{}, false
+		return false, fmt.Errorf("cannot check for docker bridge: %w", err)
 	}
+
 	for _, i := range interfaces {
 		if i.Name == "docker0" {
-			return i, true
+			return true, nil
 		}
 	}
-	return net.Interface{}, false
+	return false, nil
 }
