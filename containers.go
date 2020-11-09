@@ -13,7 +13,6 @@ import (
 	slashpath "path"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -200,8 +199,13 @@ func FindContainer(ctx context.Context, client *docker.Client, cd *ContainerDefi
 	if err != nil {
 		return nil, err
 	}
-	// Darwin -- lookup the mapping and use that
-	if runtime.GOOS == "darwin" {
+
+	dockerNetworkExists, err := hostHasDockerNetwork()
+	if err != nil {
+		return nil, fmt.Errorf("find container %s: checking for docker0: %w", containerName, err)
+	}
+
+	if !dockerNetworkExists {
 		portCheckPort := cd.PortWaitCheck.Port
 		if portCheckPort != 0 {
 			portBindings := container.NetworkSettings.Ports
