@@ -91,17 +91,16 @@ func MkdirAll(ctx context.Context, client *docker.Client, containerID string, pa
 func directoryTar(parts []string, opts *MkdirOptions) []byte {
 	buf := new(bytes.Buffer)
 	tw := tar.NewWriter(buf)
+	const dirFlag = 0o40000
 	hdr := &tar.Header{
 		Typeflag: tar.TypeDir,
+		Mode:     dirFlag | 0o755,
 	}
 	if opts != nil {
 		hdr.Uid = opts.UID
 		hdr.Gid = opts.GID
-		const dirFlag = 040000
-		if opts.Perm == 0 {
-			hdr.Mode = 0755 | dirFlag
-		} else {
-			hdr.Mode = int64(opts.Perm&os.ModePerm) | dirFlag
+		if opts.Perm != 0 {
+			hdr.Mode = dirFlag | int64(opts.Perm.Perm())
 		}
 	}
 	for i := range parts {

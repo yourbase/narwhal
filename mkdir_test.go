@@ -62,7 +62,7 @@ func TestMkdirAll(t *testing.T) {
 			wantUID  = 1001
 			wantGID  = 1002
 		)
-		err = MkdirAll(ctx, client, container.ID, path, &MkdirOptions{
+		err := MkdirAll(ctx, client, container.ID, path, &MkdirOptions{
 			Perm: wantMode & os.ModePerm,
 			UID:  wantUID,
 			GID:  wantGID,
@@ -121,7 +121,7 @@ func TestMkdirAll(t *testing.T) {
 			path     = "/etc"
 			wantMode = 040755
 		)
-		err = MkdirAll(ctx, client, container.ID, path, &MkdirOptions{
+		err := MkdirAll(ctx, client, container.ID, path, &MkdirOptions{
 			Perm: 0777, // intentionally set a different permission
 		})
 		if err != nil {
@@ -164,7 +164,7 @@ func TestMkdirAll(t *testing.T) {
 
 	t.Run("ExistingFile", func(t *testing.T) {
 		const path = "/etc/hostname"
-		err = MkdirAll(ctx, client, container.ID, path, nil)
+		err := MkdirAll(ctx, client, container.ID, path, nil)
 		if err == nil {
 			t.Error("MkdirAll did not return an error")
 		} else {
@@ -195,6 +195,58 @@ func TestMkdirAll(t *testing.T) {
 			found = true
 			if header.Typeflag != tar.TypeReg {
 				t.Errorf("%s type = %q; want %q", path, header.Typeflag, tar.TypeReg)
+			}
+		}
+		if !found {
+			t.Errorf("%s not found", path)
+		}
+	})
+
+	t.Run("NilOptions", func(t *testing.T) {
+		const (
+			path     = "/niloptions"
+			wantMode = 040755
+			wantUID  = 0
+			wantGID  = 0
+		)
+		err := MkdirAll(ctx, client, container.ID, path, nil)
+		if err != nil {
+			t.Error("MkdirAll:", err)
+		}
+		buf := new(bytes.Buffer)
+		err = client.DownloadFromContainer(container.ID, docker.DownloadFromContainerOptions{
+			Path:         path,
+			OutputStream: buf,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tarReader := tar.NewReader(buf)
+		found := false
+		for {
+			header, err := tarReader.Next()
+			if err != nil {
+				if !errors.Is(err, io.EOF) {
+					t.Error(err)
+				}
+				break
+			}
+			t.Logf("Found %q", header.Name)
+			if header.Name != "niloptions/" {
+				continue
+			}
+			found = true
+			if header.Typeflag != tar.TypeDir {
+				t.Errorf("%s type = %q; want %q", path, header.Typeflag, tar.TypeDir)
+			}
+			if header.Mode != wantMode {
+				t.Errorf("%s mode = %#o; want %#o", path, header.Mode, wantMode)
+			}
+			if header.Uid != wantUID {
+				t.Errorf("%s UID = %d; want %d", path, header.Uid, wantUID)
+			}
+			if header.Gid != wantGID {
+				t.Errorf("%s GID = %d; want %d", path, header.Gid, wantGID)
 			}
 		}
 		if !found {
