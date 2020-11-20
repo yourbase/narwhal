@@ -605,6 +605,9 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 
 		for _, portSpec := range containerDef.Ports {
 			parts := strings.Split(portSpec, ":")
+			if len(parts) != 2 {
+				return "", fmt.Errorf("create container %s: format of port must be HOSTPORT:CONTAINERPORT, but was %s", containerName, portSpec)
+			}
 			externalPort := parts[0]
 			internalPort := parts[1]
 
