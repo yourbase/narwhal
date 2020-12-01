@@ -601,7 +601,7 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 	exposedPorts := make(map[docker.Port]struct{})
 
 	if len(containerDef.Ports) > 0 {
-		log.Infof(ctx, "Will map the following ports: ")
+		log.Debugf(ctx, "Will map the following ports:")
 
 		for _, portSpec := range containerDef.Ports {
 			parts := strings.Split(portSpec, ":")
