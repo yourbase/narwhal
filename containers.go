@@ -48,34 +48,34 @@ func DockerClient() *docker.Client {
 	return client.Client
 }
 
-type PortWaitCheck struct {
-	Port         int `yaml:"port"`
-	Timeout      int `yaml:"timeout"`
-	LocalPortMap int
-}
-
+// A ContainerDefinition specifies a container to create.
 type ContainerDefinition struct {
-	Image         string   `yaml:"image"`
-	Mounts        []string `yaml:"mounts"`
-	Ports         []string `yaml:"ports"`
-	Environment   []string `yaml:"environment"`
-	Argv          []string
-	Command       string `yaml:"command"` // deprecated: use Argv
-	WorkDir       string `yaml:"workdir"`
-	Privileged    bool
-	PortWaitCheck PortWaitCheck `yaml:"port_check"`
-	Label         string        `yaml:"label"`
-	ExecUserId    string
-	ExecGroupId   string
-	Namespace     string
-	LocalWorkDir  string
-}
+	// Image is a reference to a Docker image. Must not be empty.
+	Image string
+	// Label is unique text inserted into the Docker container name. May be empty.
+	Label string
+	// Namespace is a prefix for the Docker container name. May be empty.
+	Namespace string
 
-// clone returns a shallow clone of c.
-func (c *ContainerDefinition) clone() *ContainerDefinition {
-	c2 := new(ContainerDefinition)
-	*c2 = *c
-	return c2
+	// Argv specifies the command to run as PID 1 in the container.
+	Argv []string
+	// Deprecated: use Argv.
+	Command string
+
+	// Ports is a list of "HOST:CONTAINER" port mappings. The mappings may
+	// optionally end in "/tcp" or "/udp" to indicate the protocol.
+	Ports []string
+	// If HealthCheckPort is not zero, the matching container TCP port will be
+	// made available at the returned Container.HealthCheckAddr address.
+	HealthCheckPort int
+
+	Mounts       []string
+	Environment  []string
+	WorkDir      string
+	Privileged   bool
+	ExecUserID   string
+	ExecGroupID  string
+	LocalWorkDir string
 }
 
 func (c *ContainerDefinition) DockerMounts() ([]docker.HostMount, error) {
@@ -140,10 +140,13 @@ func (c *ContainerDefinition) containerName() string {
 	return sanitizeContainerName(containerName)
 }
 
+// Container holds basic information to identify a Docker container.
 type Container struct {
-	Id         string
-	Name       string
-	Definition ContainerDefinition
+	ID string
+
+	// If not nil, HealthCheckAddr indicates the TCP port address that should be
+	// dialed to check whether the container started up.
+	HealthCheckAddr *net.TCPAddr
 }
 
 func sanitizeContainerName(proposed string) string {
@@ -195,41 +198,47 @@ func FindContainer(ctx context.Context, client *docker.Client, cd *ContainerDefi
 	}
 	c := result[0]
 	log.Debugf(ctx, "Found container %s with ID %s", containerName, c.ID)
-	container, err := client.InspectContainer(c.ID)
-	if err != nil {
-		return nil, err
-	}
 
-	dockerNetworkExists, err := hostHasDockerNetwork()
-	if err != nil {
-		return nil, fmt.Errorf("find container %s: checking for docker0: %w", containerName, err)
-	}
-
-	if !dockerNetworkExists {
-		portCheckPort := cd.PortWaitCheck.Port
-		if portCheckPort != 0 {
-			portBindings := container.NetworkSettings.Ports
-			for k, v := range portBindings {
-				parts := strings.Split(string(k), "/")
-				if len(parts) == 2 {
-					port, _ := strconv.Atoi(parts[0])
-					if port == portCheckPort {
-						if len(v) == 1 {
-							localPort, _ := strconv.Atoi(v[0].HostPort)
-							cd = cd.clone()
-							cd.PortWaitCheck.LocalPortMap = localPort
-							log.Infof(ctx, "Will use 127.0.0.1:%d for port check", localPort)
-						}
+	var healthCheckAddr *net.TCPAddr
+	if cd.HealthCheckPort != 0 {
+		dockerNetworkExists, err := hostHasDockerNetwork()
+		if err != nil {
+			return nil, fmt.Errorf("find container %s: %w", containerName, err)
+		}
+		container, err := client.InspectContainerWithContext(c.ID, ctx)
+		if err != nil {
+			return nil, err
+		}
+		if dockerNetworkExists {
+			ip, err := ipv4Address(container)
+			if err != nil {
+				return nil, fmt.Errorf("find container %q: %w", containerName, errNotFound)
+			}
+			healthCheckAddr = &net.TCPAddr{
+				IP:   ip,
+				Port: cd.HealthCheckPort,
+			}
+		} else {
+			k := docker.Port(fmt.Sprintf("%d/tcp", cd.HealthCheckPort))
+			for _, v := range container.NetworkSettings.Ports[k] {
+				if localPort, err := strconv.Atoi(v.HostPort); err == nil {
+					healthCheckAddr = &net.TCPAddr{
+						IP:   net.IPv4(127, 0, 0, 1),
+						Port: localPort,
 					}
+					break
 				}
+				log.Debugf(ctx, "Ignoring invalid port %q", v.HostPort)
+			}
+			if healthCheckAddr == nil {
+				return nil, fmt.Errorf("find container %q: wait check port %d not exposed", containerName, cd.HealthCheckPort)
 			}
 		}
 	}
 
 	return &Container{
-		Id:         c.ID,
-		Name:       containerName,
-		Definition: *cd,
+		ID:              c.ID,
+		HealthCheckAddr: healthCheckAddr,
 	}, nil
 }
 
@@ -301,24 +310,24 @@ func BuildImageWithArchive(ctx context.Context, client *docker.Client, pullOutpu
 		return fmt.Errorf("Error pulling image (%s): %v", cd.Image, err)
 	}
 
-	containerID, err := CreateContainer(ctx, client, pullOutput, cd)
+	container, err := CreateContainer(ctx, client, pullOutput, cd)
 	if err != nil {
 		return fmt.Errorf("Error creating container: %v", err)
 	}
 	defer func() {
-		if err := RemoveContainerAndVolumes(ctx, client, containerID); err != nil {
+		if err := RemoveContainerAndVolumes(ctx, client, container.ID); err != nil {
 			log.Errorf(ctx, "Unable to destroy temporary container: %v", err)
 		}
 	}()
 
-	err = uploadArchive(ctx, client, containerID, localFile, remotePath)
+	err = uploadArchive(ctx, client, container.ID, localFile, remotePath)
 	if err != nil {
 		return fmt.Errorf("Error uploading file: %v", err)
 	}
 
 	_, err = client.CommitContainer(docker.CommitContainerOptions{
 		Context:    ctx,
-		Container:  containerID,
+		Container:  container.ID,
 		Repository: repository,
 		Tag:        tag,
 	})
@@ -350,12 +359,16 @@ func IPv4Address(ctx context.Context, client *docker.Client, containerID string)
 	if err != nil {
 		return nil, fmt.Errorf("find container %s address: %w", containerID, err)
 	}
+	return ipv4Address(c)
+}
+
+func ipv4Address(c *docker.Container) (net.IP, error) {
 	if c.NetworkSettings.IPAddress == "" {
-		return nil, fmt.Errorf("find container %s address: none assigned (check container logs?)", containerID)
+		return nil, fmt.Errorf("find container %s address: none assigned (check container logs?)", c.ID)
 	}
 	ipv4 := net.ParseIP(c.NetworkSettings.IPAddress)
 	if ipv4 == nil {
-		return nil, fmt.Errorf("find container %s address: invalid IP %q", containerID, c.NetworkSettings.IPAddress)
+		return nil, fmt.Errorf("find container %s address: invalid IP %q", c.ID, c.NetworkSettings.IPAddress)
 	}
 	return ipv4, nil
 }
@@ -576,24 +589,24 @@ func IsExitError(e error) (code int, ok bool) {
 }
 
 // CreateContainer creates a new container from the provided definition.
-func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.Writer, containerDef *ContainerDefinition) (id string, _ error) {
+func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.Writer, containerDef *ContainerDefinition) (_ *Container, err error) {
 	if containerDef.Image == "" {
-		containerDef.Image = "yourbase/yb_ubuntu:18.04"
+		return nil, fmt.Errorf("create container: image not specified")
 	}
 	if len(containerDef.Argv) > 0 && containerDef.Command != "" {
-		return "", fmt.Errorf("create container: both Argv and Command specified")
+		return nil, fmt.Errorf("create container: both Argv and Command specified")
 	}
 
 	containerName := containerDef.containerName()
 	log.Debugf(ctx, "Creating container '%s'", containerName)
 
 	if err := PullImageIfNotHere(ctx, client, pullOutput, containerDef, docker.AuthConfiguration{}); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	mounts, err := containerDef.DockerMounts()
 	if err != nil {
-		return "", fmt.Errorf("create container %s: mounts: %w", containerName, err)
+		return nil, fmt.Errorf("create container %s: mounts: %w", containerName, err)
 	}
 
 	var ports []string
@@ -606,7 +619,7 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 		for _, portSpec := range containerDef.Ports {
 			parts := strings.Split(portSpec, ":")
 			if len(parts) != 2 {
-				return "", fmt.Errorf("create container %s: format of port must be HOSTPORT:CONTAINERPORT, but was %s", containerName, portSpec)
+				return nil, fmt.Errorf("create container %s: format of port must be HOSTPORT:CONTAINERPORT, but was %s", containerName, portSpec)
 			}
 			externalPort := parts[0]
 			internalPort := parts[1]
@@ -629,26 +642,33 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 		}
 	}
 
-	if containerDef.PortWaitCheck.Port != 0 {
+	var healthCheckAddr *net.TCPAddr
+	if containerDef.HealthCheckPort != 0 {
 		dockerNetworkExists, err := hostHasDockerNetwork()
 		if err != nil {
-			return "", fmt.Errorf("create container %s: checking for docker0: %w", containerName, err)
+			return nil, fmt.Errorf("create container %s: checking for docker0: %w", containerName, err)
 		}
 
-		// Port wait check, need to map to localhost port if Docker isn't doing it for us
-		if !dockerNetworkExists {
-			checkPort := containerDef.PortWaitCheck.Port
-			log.Infof(ctx, "Port wait check on port %d; finding free local port...", checkPort)
+		if dockerNetworkExists {
+			// IP must be filled in after the container is started. Keep nil for now.
+			healthCheckAddr = &net.TCPAddr{Port: containerDef.HealthCheckPort}
+		} else {
+			// Need to map to localhost port if Docker isn't doing it for us
+			log.Infof(ctx, "Port wait check on port %d; finding free local port...", containerDef.HealthCheckPort)
 			localPort, err := findFreePort()
 			if err != nil {
-				return "", fmt.Errorf("create container %s: find free TCP port to forward from: %w", containerName, err)
+				return nil, fmt.Errorf("create container %s: find free TCP port to forward from: %w", containerName, err)
 			}
-			log.Infof(ctx, "Mapping %d locally to %d in the container.", localPort, checkPort)
-			containerDef.PortWaitCheck.LocalPortMap = localPort
-			portKey := docker.Port(strconv.Itoa(checkPort) + "/tcp")
+			log.Infof(ctx, "Mapping %d locally to %d in the container.", localPort, containerDef.HealthCheckPort)
+			healthCheckAddr = &net.TCPAddr{
+				IP:   net.IPv4(127, 0, 0, 1),
+				Port: localPort,
+			}
+
+			portKey := dockerTCPPort(containerDef.HealthCheckPort)
 			ports = append(ports, string(portKey))
 			bindings[portKey] = append(bindings[portKey], docker.PortBinding{
-				HostIP:   "127.0.0.1",
+				HostIP:   healthCheckAddr.IP.String(),
 				HostPort: strconv.Itoa(localPort),
 			})
 			exposedPorts[portKey] = struct{}{}
@@ -686,11 +706,38 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 		HostConfig: &hostConfig,
 	})
 	if err != nil {
-		return "", fmt.Errorf("create container %s: %v", containerName, err)
+		return nil, fmt.Errorf("create container %s: %v", containerName, err)
 	}
+	defer func() {
+		if err != nil {
+			rmErr := client.RemoveContainer(docker.RemoveContainerOptions{
+				Context:       xcontext.IgnoreDeadline(ctx),
+				ID:            container.ID,
+				RemoveVolumes: true,
+			})
+			if rmErr != nil {
+				log.Infof(ctx, "unable to remove container: %v", rmErr)
+			}
+		}
+	}()
 
 	log.Debugf(ctx, "Created container ID: %s", container.ID)
-	return container.ID, nil
+	if healthCheckAddr != nil && healthCheckAddr.IP == nil {
+		// Fill in IP address of Docker container if needed.
+		ip, err := ipv4Address(container)
+		if err != nil {
+			return nil, err
+		}
+		healthCheckAddr.IP = ip
+	}
+	return &Container{
+		ID:              container.ID,
+		HealthCheckAddr: healthCheckAddr,
+	}, nil
+}
+
+func dockerTCPPort(n int) docker.Port {
+	return docker.Port(fmt.Sprintf("%d/tcp", n))
 }
 
 func findFreePort() (int, error) {

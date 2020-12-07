@@ -33,7 +33,7 @@ func TestMain(m *testing.M) {
 func TestExecExitError(t *testing.T) {
 	ctx := testlog.WithTB(context.Background(), t)
 	client := DockerClient()
-	containerID, err := CreateContainer(ctx, client, os.Stdout, &ContainerDefinition{
+	container, err := CreateContainer(ctx, client, os.Stdout, &ContainerDefinition{
 		Label:   "narwhal-exec-exit-error",
 		Image:   "yourbase/yb_ubuntu:18.04",
 		Command: "/usr/bin/tail -f /dev/null",
@@ -43,30 +43,30 @@ func TestExecExitError(t *testing.T) {
 	}
 
 	defer func() {
-		err := client.StopContainerWithContext(containerID, 2, ctx)
+		err := client.StopContainerWithContext(container.ID, 2, ctx)
 		if err != nil {
-			t.Logf("stopping container %s: %v", containerID, err)
+			t.Logf("stopping container %s: %v", container.ID, err)
 		}
 		err = client.RemoveContainer(docker.RemoveContainerOptions{
-			ID:      containerID,
+			ID:      container.ID,
 			Context: ctx,
 		})
 		if err != nil {
-			t.Logf("removing container %s: %v", containerID, err)
+			t.Logf("removing container %s: %v", container.ID, err)
 		}
 	}()
 
-	err = StartContainer(ctx, client, containerID)
+	err = StartContainer(ctx, client, container.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if running, err := IsRunning(ctx, client, containerID); !running {
-		t.Fatalf("Container %s didn't start, but should have, as StartContainer was called:\n%v", containerID, err)
+	if running, err := IsRunning(ctx, client, container.ID); !running {
+		t.Fatalf("Container %s didn't start, but should have, as StartContainer was called:\n%v", container.ID, err)
 	}
 
 	cmdStat := "stat /somewhere/strange/that/do/not/exist"
-	err = ExecShell(ctx, client, containerID, cmdStat, &ExecShellOptions{})
+	err = ExecShell(ctx, client, container.ID, cmdStat, &ExecShellOptions{})
 	if code, ok := IsExitError(err); !ok || code != 1 {
 		t.Logf("is it exit error? %v", ok)
 		t.Errorf("error = %v; want exit code 1, got %d", err, code)
@@ -74,7 +74,7 @@ func TestExecExitError(t *testing.T) {
 
 	// Should have the "-p" flag
 	cmdMkdir := "mkdir /somewhere/strange/that/do/not/exist"
-	err = ExecShell(ctx, client, containerID, cmdMkdir, &ExecShellOptions{})
+	err = ExecShell(ctx, client, container.ID, cmdMkdir, &ExecShellOptions{})
 	if code, ok := IsExitError(err); !ok || code != 1 {
 		t.Logf("is it exit error? %v", ok)
 		t.Errorf("error = %v; want exit code 1, got %d", err, code)

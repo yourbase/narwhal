@@ -23,33 +23,33 @@ func randomDefinition() *narwhal.ContainerDefinition {
 }
 
 func ExampleCreateContainer() {
-	containerID, err := narwhal.CreateContainer(ctx, client, os.Stdout, randomDefinition())
+	container, err := narwhal.CreateContainer(ctx, client, os.Stdout, randomDefinition())
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 	fmt.Println("Container created!")
 
-	defer narwhal.RemoveContainerAndVolumes(ctx, client, containerID)
+	defer narwhal.RemoveContainerAndVolumes(ctx, client, container.ID)
 
 	// Output:
 	// Container created!
 }
 
 func ExampleStartContainer() {
-	containerID, err := narwhal.CreateContainer(ctx, client, os.Stdout, randomDefinition())
+	container, err := narwhal.CreateContainer(ctx, client, os.Stdout, randomDefinition())
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	defer narwhal.RemoveContainerAndVolumes(ctx, client, containerID)
+	defer narwhal.RemoveContainerAndVolumes(ctx, client, container.ID)
 
-	if err := narwhal.StartContainer(ctx, client, containerID); err != nil {
+	if err := narwhal.StartContainer(ctx, client, container.ID); err != nil {
 		fmt.Println(err)
 		return
 	}
 
-	if isRunning, err := narwhal.IsRunning(ctx, client, containerID); err != nil {
+	if isRunning, err := narwhal.IsRunning(ctx, client, container.ID); err != nil {
 		fmt.Println(err)
 		return
 	} else if isRunning {
@@ -61,22 +61,16 @@ func ExampleStartContainer() {
 }
 
 func ExampleUploadFile() {
-	containerID, err := narwhal.CreateContainer(ctx, client, os.Stdout, randomDefinition())
+	container, err := narwhal.CreateContainer(ctx, client, os.Stdout, randomDefinition())
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	defer narwhal.RemoveContainerAndVolumes(ctx, client, containerID)
+	defer narwhal.RemoveContainerAndVolumes(ctx, client, container.ID)
 
-	if err := narwhal.StartContainer(ctx, client, containerID); err != nil {
+	if err := narwhal.StartContainer(ctx, client, container.ID); err != nil {
 		fmt.Println(err)
 		return
-	}
-
-	if isRunning, err := narwhal.IsRunning(ctx, client, containerID); err != nil {
-		fmt.Println(err)
-	} else if isRunning {
-		fmt.Println("Container is running!")
 	}
 
 	f, err := ioutil.TempFile("./", "tmpfile")
@@ -86,7 +80,7 @@ func ExampleUploadFile() {
 	}
 	defer os.Remove(f.Name())
 
-	if err := narwhal.UploadFile(ctx, client, containerID, "/tmp/tmpfile", f.Name()); err != nil {
+	if err := narwhal.UploadFile(ctx, client, container.ID, "/tmp/tmpfile", f.Name()); err != nil {
 		fmt.Println(err)
 		return
 	}
@@ -94,6 +88,5 @@ func ExampleUploadFile() {
 	fmt.Println("File uploaded!")
 
 	// Output:
-	// Container is running!
 	// File uploaded!
 }
