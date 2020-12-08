@@ -11,7 +11,6 @@ import (
 	"net"
 	"os"
 	slashpath "path"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
