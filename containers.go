@@ -69,13 +69,12 @@ type ContainerDefinition struct {
 	// made available at the returned Container.HealthCheckAddr address.
 	HealthCheckPort int
 
-	Mounts       []docker.HostMount
-	Environment  []string
-	WorkDir      string
-	Privileged   bool
-	ExecUserID   string
-	ExecGroupID  string
-	LocalWorkDir string
+	Mounts      []docker.HostMount
+	Environment []string
+	WorkDir     string
+	Privileged  bool
+	ExecUserID  string
+	ExecGroupID string
 }
 
 func (c *ContainerDefinition) ImageNameWithTag() string {
