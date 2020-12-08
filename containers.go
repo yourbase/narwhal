@@ -69,43 +69,13 @@ type ContainerDefinition struct {
 	// made available at the returned Container.HealthCheckAddr address.
 	HealthCheckPort int
 
-	Mounts       []string
+	Mounts       []docker.HostMount
 	Environment  []string
 	WorkDir      string
 	Privileged   bool
 	ExecUserID   string
 	ExecGroupID  string
 	LocalWorkDir string
-}
-
-func (c *ContainerDefinition) DockerMounts() ([]docker.HostMount, error) {
-	mounts := make([]docker.HostMount, 0)
-	for _, m := range c.Mounts {
-		parts := strings.Split(m, ":")
-		if len(parts) == 2 {
-			src := parts[0]
-			dst := parts[1]
-			if src[0] != '/' {
-				src = filepath.Join(c.LocalWorkDir, src)
-			}
-			// TODO do the same for dst?
-			// os.Stat prevents /var/run/docker.sock from erroring out as "not a directory"
-			if _, err := os.Stat(src); os.IsNotExist(err) {
-				if err := os.MkdirAll(src, 0777); err != nil {
-					return []docker.HostMount{}, fmt.Errorf("Couldn't make source dir %s: %v", src, err)
-				}
-			}
-			mounts = append(mounts, docker.HostMount{Source: src, Target: dst, Type: "bind"})
-		} else {
-			return []docker.HostMount{}, fmt.Errorf("Malformed mount spec: %s", m)
-		}
-	}
-
-	return mounts, nil
-}
-
-func (c *ContainerDefinition) AddMount(mount string) {
-	c.Mounts = append(c.Mounts, mount)
 }
 
 func (c *ContainerDefinition) ImageNameWithTag() string {
@@ -604,11 +574,6 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 		return nil, err
 	}
 
-	mounts, err := containerDef.DockerMounts()
-	if err != nil {
-		return nil, fmt.Errorf("create container %s: mounts: %w", containerName, err)
-	}
-
 	var ports []string
 	bindings := make(map[docker.Port][]docker.PortBinding)
 	exposedPorts := make(map[docker.Port]struct{})
@@ -676,7 +641,7 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 	}
 
 	hostConfig := docker.HostConfig{
-		Mounts:       mounts,
+		Mounts:       containerDef.Mounts,
 		PortBindings: bindings,
 		Privileged:   containerDef.Privileged,
 	}
