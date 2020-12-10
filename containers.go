@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/yourbase/commons/xcontext"
@@ -108,15 +109,6 @@ func (c *ContainerDefinition) containerName() string {
 	return sanitizeContainerName(containerName)
 }
 
-// Container holds basic information to identify a Docker container.
-type Container struct {
-	ID string
-
-	// If not nil, HealthCheckAddr indicates the TCP port address that should be
-	// dialed to check whether the container started up.
-	HealthCheckAddr *net.TCPAddr
-}
-
 func sanitizeContainerName(proposed string) string {
 	// Remove unusable characters from the container name
 	// Must match: [a-zA-Z0-9][a-zA-Z0-9_.-]
@@ -140,7 +132,7 @@ func sanitizeContainerName(proposed string) string {
 // FindContainer searches for a container that matches the definition. If the
 // container is not found, it returns an error for which IsContainerNotFound
 // returns true.
-func FindContainer(ctx context.Context, client *docker.Client, cd *ContainerDefinition) (*Container, error) {
+func FindContainer(ctx context.Context, client *docker.Client, cd *ContainerDefinition) (containerID string, _ error) {
 	// TODO: make sure the opts match the existing container
 
 	containerName := cd.containerName()
@@ -155,59 +147,18 @@ func FindContainer(ctx context.Context, client *docker.Client, cd *ContainerDefi
 		All: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("find container %q: %w", containerName, err)
+		return "", fmt.Errorf("find container %q: %w", containerName, err)
 	}
 	if len(result) == 0 {
-		return nil, fmt.Errorf("find container %q: %w", containerName, errNotFound)
+		return "", fmt.Errorf("find container %q: %w", containerName, errNotFound)
 	}
 
 	for _, c := range result {
 		log.Debugf(ctx, "ID: %s -- NAME: %s", c.ID, c.Names)
 	}
-	c := result[0]
-	log.Debugf(ctx, "Found container %s with ID %s", containerName, c.ID)
-
-	var healthCheckAddr *net.TCPAddr
-	if cd.HealthCheckPort != 0 {
-		dockerNetworkExists, err := hostHasDockerNetwork()
-		if err != nil {
-			return nil, fmt.Errorf("find container %s: %w", containerName, err)
-		}
-		container, err := client.InspectContainerWithContext(c.ID, ctx)
-		if err != nil {
-			return nil, err
-		}
-		if dockerNetworkExists {
-			ip, err := ipv4Address(container)
-			if err != nil {
-				return nil, fmt.Errorf("find container %q: %w", containerName, errNotFound)
-			}
-			healthCheckAddr = &net.TCPAddr{
-				IP:   ip,
-				Port: cd.HealthCheckPort,
-			}
-		} else {
-			k := docker.Port(fmt.Sprintf("%d/tcp", cd.HealthCheckPort))
-			for _, v := range container.NetworkSettings.Ports[k] {
-				if localPort, err := strconv.Atoi(v.HostPort); err == nil {
-					healthCheckAddr = &net.TCPAddr{
-						IP:   net.IPv4(127, 0, 0, 1),
-						Port: localPort,
-					}
-					break
-				}
-				log.Debugf(ctx, "Ignoring invalid port %q", v.HostPort)
-			}
-			if healthCheckAddr == nil {
-				return nil, fmt.Errorf("find container %q: wait check port %d not exposed", containerName, cd.HealthCheckPort)
-			}
-		}
-	}
-
-	return &Container{
-		ID:              c.ID,
-		HealthCheckAddr: healthCheckAddr,
-	}, nil
+	id := result[0].ID
+	log.Debugf(ctx, "Found container %s with ID %s", containerName, id)
+	return id, nil
 }
 
 var errNotFound = errors.New("container not found")
@@ -278,24 +229,24 @@ func BuildImageWithArchive(ctx context.Context, client *docker.Client, pullOutpu
 		return fmt.Errorf("Error pulling image (%s): %v", cd.Image, err)
 	}
 
-	container, err := CreateContainer(ctx, client, pullOutput, cd)
+	containerID, err := CreateContainer(ctx, client, pullOutput, cd)
 	if err != nil {
 		return fmt.Errorf("Error creating container: %v", err)
 	}
 	defer func() {
-		if err := RemoveContainerAndVolumes(ctx, client, container.ID); err != nil {
+		if err := RemoveContainerAndVolumes(ctx, client, containerID); err != nil {
 			log.Errorf(ctx, "Unable to destroy temporary container: %v", err)
 		}
 	}()
 
-	err = uploadArchive(ctx, client, container.ID, localFile, remotePath)
+	err = uploadArchive(ctx, client, containerID, localFile, remotePath)
 	if err != nil {
 		return fmt.Errorf("Error uploading file: %v", err)
 	}
 
 	_, err = client.CommitContainer(docker.CommitContainerOptions{
 		Context:    ctx,
-		Container:  container.ID,
+		Container:  containerID,
 		Repository: repository,
 		Tag:        tag,
 	})
@@ -342,13 +293,80 @@ func ipv4Address(c *docker.Container) (net.IP, error) {
 }
 
 // StartContainer starts an already created container. If the container is
-// already running, this function no-ops.
-func StartContainer(ctx context.Context, client *docker.Client, containerID string) error {
+// already running, this function no-ops. If healthCheckPort is not zero, then
+// this function will wait until the given container port accepts TCP
+// connections or the Context is cancelled.
+func StartContainer(ctx context.Context, client *docker.Client, containerID string, healthCheckPort int) error {
 	c, err := client.InspectContainerWithContext(containerID, ctx)
-	if err == nil && c.State.Running {
+	if err != nil {
+		return fmt.Errorf("start container %s: inspect: %w", containerID, err)
+	}
+	if !c.State.Running {
+		err := client.StartContainerWithContext(containerID, &docker.HostConfig{}, ctx)
+		if err != nil {
+			return fmt.Errorf("start container %s: %w", containerID, err)
+		}
+		c, err = client.InspectContainerWithContext(containerID, ctx)
+		if err != nil {
+			return fmt.Errorf("start container %s: inspect after starting: %w", containerID, err)
+		}
+	}
+	if healthCheckPort == 0 {
 		return nil
 	}
-	return client.StartContainerWithContext(containerID, &docker.HostConfig{}, ctx)
+	dockerNetworkExists, err := hostHasDockerNetwork()
+	if err != nil {
+		return fmt.Errorf("start container %s: %w", containerID, err)
+	}
+	var healthCheckAddr *net.TCPAddr
+	if dockerNetworkExists {
+		ip, err := ipv4Address(c)
+		if err != nil {
+			return fmt.Errorf("start container %s: %w", containerID, err)
+		}
+		healthCheckAddr = &net.TCPAddr{
+			IP:   ip,
+			Port: healthCheckPort,
+		}
+	} else {
+		k := dockerTCPPort(healthCheckPort)
+		for _, v := range c.NetworkSettings.Ports[k] {
+			if localPort, err := strconv.Atoi(v.HostPort); err == nil {
+				healthCheckAddr = &net.TCPAddr{
+					IP:   net.IPv4(127, 0, 0, 1),
+					Port: localPort,
+				}
+				break
+			}
+			log.Debugf(ctx, "Ignoring invalid port %q", v.HostPort)
+		}
+		if healthCheckAddr == nil {
+			return fmt.Errorf("start container %s: wait check port %d not exposed", containerID, healthCheckPort)
+		}
+	}
+	if err := waitForTCPPort(ctx, healthCheckAddr.String()); err != nil {
+		return fmt.Errorf("start container %s: %w", containerID, err)
+	}
+	return nil
+}
+
+func waitForTCPPort(ctx context.Context, addr string) error {
+	dialer := new(net.Dialer)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		c, err := dialer.DialContext(ctx, "tcp", addr)
+		if err == nil {
+			c.Close()
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return fmt.Errorf("wait for %q: %w", addr, err)
+		}
+	}
 }
 
 // IsRunning check if a container is running by its ID
@@ -557,19 +575,19 @@ func IsExitError(e error) (code int, ok bool) {
 }
 
 // CreateContainer creates a new container from the provided definition.
-func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.Writer, containerDef *ContainerDefinition) (_ *Container, err error) {
+func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.Writer, containerDef *ContainerDefinition) (containerID string, err error) {
 	if containerDef.Image == "" {
-		return nil, fmt.Errorf("create container: image not specified")
+		return "", fmt.Errorf("create container: image not specified")
 	}
 	if len(containerDef.Argv) > 0 && containerDef.Command != "" {
-		return nil, fmt.Errorf("create container: both Argv and Command specified")
+		return "", fmt.Errorf("create container: both Argv and Command specified")
 	}
 
 	containerName := containerDef.containerName()
 	log.Debugf(ctx, "Creating container '%s'", containerName)
 
 	if err := PullImageIfNotHere(ctx, client, pullOutput, containerDef, docker.AuthConfiguration{}); err != nil {
-		return nil, err
+		return "", err
 	}
 
 	var ports []string
@@ -582,20 +600,19 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 		for _, portSpec := range containerDef.Ports {
 			parts := strings.Split(portSpec, ":")
 			if len(parts) != 2 {
-				return nil, fmt.Errorf("create container %s: format of port must be HOSTPORT:CONTAINERPORT, but was %s", containerName, portSpec)
+				return "", fmt.Errorf("create container %s: format of port must be HOSTPORT:CONTAINERPORT, but was %s", containerName, portSpec)
 			}
 			externalPort := parts[0]
 			internalPort := parts[1]
 
-			protoParts := strings.Split(internalPort, "/")
 			protocol := "tcp"
-			if len(protoParts) == 2 {
+			if protoParts := strings.Split(internalPort, "/"); len(protoParts) == 2 {
 				protocol = protoParts[1]
 				internalPort = protoParts[0]
 			}
 
 			log.Debugf(ctx, "  * %s -> %s/%s in container", externalPort, internalPort, protocol)
-			portKey := docker.Port(internalPort + "/tcp")
+			portKey := docker.Port(internalPort + "/" + protocol)
 			ports = append(ports, string(portKey))
 			bindings[portKey] = append(bindings[portKey], docker.PortBinding{
 				HostIP:   "0.0.0.0",
@@ -605,36 +622,27 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 		}
 	}
 
-	var healthCheckAddr *net.TCPAddr
 	if containerDef.HealthCheckPort != 0 {
+		exposedPorts[dockerTCPPort(containerDef.HealthCheckPort)] = struct{}{}
 		dockerNetworkExists, err := hostHasDockerNetwork()
 		if err != nil {
-			return nil, fmt.Errorf("create container %s: checking for docker0: %w", containerName, err)
+			return "", fmt.Errorf("create container %s: checking for docker0: %w", containerName, err)
 		}
-
-		if dockerNetworkExists {
-			// IP must be filled in after the container is started. Keep nil for now.
-			healthCheckAddr = &net.TCPAddr{Port: containerDef.HealthCheckPort}
-		} else {
-			// Need to map to localhost port if Docker isn't doing it for us
+		if !dockerNetworkExists {
+			// Need to map to localhost port if Docker isn't doing it for us.
 			log.Infof(ctx, "Port wait check on port %d; finding free local port...", containerDef.HealthCheckPort)
 			localPort, err := findFreePort()
 			if err != nil {
-				return nil, fmt.Errorf("create container %s: find free TCP port to forward from: %w", containerName, err)
+				return "", fmt.Errorf("create container %s: find free TCP port to forward from: %w", containerName, err)
 			}
 			log.Infof(ctx, "Mapping %d locally to %d in the container.", localPort, containerDef.HealthCheckPort)
-			healthCheckAddr = &net.TCPAddr{
-				IP:   net.IPv4(127, 0, 0, 1),
-				Port: localPort,
-			}
 
 			portKey := dockerTCPPort(containerDef.HealthCheckPort)
 			ports = append(ports, string(portKey))
 			bindings[portKey] = append(bindings[portKey], docker.PortBinding{
-				HostIP:   healthCheckAddr.IP.String(),
+				HostIP:   "127.0.0.1",
 				HostPort: strconv.Itoa(localPort),
 			})
-			exposedPorts[portKey] = struct{}{}
 		}
 	}
 
@@ -669,7 +677,7 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 		HostConfig: &hostConfig,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("create container %s: %v", containerName, err)
+		return "", fmt.Errorf("create container %s: %v", containerName, err)
 	}
 	defer func() {
 		if err != nil {
@@ -685,18 +693,7 @@ func CreateContainer(ctx context.Context, client *docker.Client, pullOutput io.W
 	}()
 
 	log.Debugf(ctx, "Created container ID: %s", container.ID)
-	if healthCheckAddr != nil && healthCheckAddr.IP == nil {
-		// Fill in IP address of Docker container if needed.
-		ip, err := ipv4Address(container)
-		if err != nil {
-			return nil, err
-		}
-		healthCheckAddr.IP = ip
-	}
-	return &Container{
-		ID:              container.ID,
-		HealthCheckAddr: healthCheckAddr,
-	}, nil
+	return container.ID, nil
 }
 
 func dockerTCPPort(n int) docker.Port {
