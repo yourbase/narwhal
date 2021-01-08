@@ -30,58 +30,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestExecExitError(t *testing.T) {
-	ctx := testlog.WithTB(context.Background(), t)
-	client := DockerClient()
-	containerID, err := CreateContainer(ctx, client, os.Stdout, &ContainerDefinition{
-		Label:   "narwhal-exec-exit-error",
-		Image:   "yourbase/yb_ubuntu:18.04",
-		Command: "/usr/bin/tail -f /dev/null",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() {
-		err := client.StopContainerWithContext(containerID, 2, ctx)
-		if err != nil {
-			t.Logf("stopping container %s: %v", containerID, err)
-		}
-		err = client.RemoveContainer(docker.RemoveContainerOptions{
-			ID:      containerID,
-			Context: ctx,
-		})
-		if err != nil {
-			t.Logf("removing container %s: %v", containerID, err)
-		}
-	}()
-
-	err = StartContainer(ctx, client, containerID, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if running, err := IsRunning(ctx, client, containerID); !running {
-		t.Fatalf("Container %s didn't start, but should have, as StartContainer was called:\n%v", containerID, err)
-	}
-
-	cmdStat := "stat /somewhere/strange/that/do/not/exist"
-	err = ExecShell(ctx, client, containerID, cmdStat, &ExecShellOptions{})
-	if code, ok := IsExitError(err); !ok || code != 1 {
-		t.Logf("is it exit error? %v", ok)
-		t.Errorf("error = %v; want exit code 1, got %d", err, code)
-	}
-
-	// Should have the "-p" flag
-	cmdMkdir := "mkdir /somewhere/strange/that/do/not/exist"
-	err = ExecShell(ctx, client, containerID, cmdMkdir, &ExecShellOptions{})
-	if code, ok := IsExitError(err); !ok || code != 1 {
-		t.Logf("is it exit error? %v", ok)
-		t.Errorf("error = %v; want exit code 1, got %d", err, code)
-	}
-
-}
-
 func TestHealthCheck(t *testing.T) {
 	ctx := testlog.WithTB(context.Background(), t)
 	client := DockerClient()
