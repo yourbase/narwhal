@@ -17,7 +17,6 @@ import (
 
 func (registry *Registry) Manifest(repository, reference string) (*schema1.SignedManifest, error) {
 	url := registry.url("/v2/%s/manifests/%s", repository, reference)
-	registry.Logf("registry.manifest.get url=%s repository=%s reference=%s", url, repository, reference)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -47,7 +46,6 @@ func (registry *Registry) Manifest(repository, reference string) (*schema1.Signe
 
 func (registry *Registry) ManifestV2(repository, reference string) (*schema2.DeserializedManifest, error) {
 	url := registry.url("/v2/%s/manifests/%s", repository, reference)
-	registry.Logf("registry.manifest.get url=%s repository=%s reference=%s", url, repository, reference)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -76,7 +74,6 @@ func (registry *Registry) ManifestV2(repository, reference string) (*schema2.Des
 
 func (registry *Registry) ManifestDigest(repository, reference string) (digest.Digest, error) {
 	url := registry.url("/v2/%s/manifests/%s", repository, reference)
-	registry.Logf("registry.manifest.head url=%s repository=%s reference=%s", url, repository, reference)
 
 	resp, err := registry.Client.Head(url)
 	if resp != nil {
@@ -90,7 +87,6 @@ func (registry *Registry) ManifestDigest(repository, reference string) (digest.D
 
 func (registry *Registry) DeleteManifest(repository string, digest digest.Digest) error {
 	url := registry.url("/v2/%s/manifests/%s", repository, digest)
-	registry.Logf("registry.manifest.delete url=%s repository=%s reference=%s", url, repository, digest)
 
 	req, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {
@@ -108,7 +104,6 @@ func (registry *Registry) DeleteManifest(repository string, digest digest.Digest
 
 func (registry *Registry) PutManifest(repository, reference string, manifest distribution.Manifest) error {
 	url := registry.url("/v2/%s/manifests/%s", repository, reference)
-	registry.Logf("registry.manifest.put url=%s repository=%s reference=%s", url, repository, reference)
 
 	mediaType, payload, err := manifest.Payload()
 	if err != nil {
