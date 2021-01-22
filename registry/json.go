@@ -5,32 +5,40 @@
 package registry
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
+	"io/ioutil"
 	"net/http"
+	"net/url"
 	"regexp"
-)
-
-var (
-	ErrNoMorePages = errors.New("no more pages")
 )
 
 // getPaginatedJSON accepts a string and a pointer, and returns the
 // next page URL while updating pointed-to variable with a parsed JSON
 // value. When there are no more pages it returns `ErrNoMorePages`.
-func (registry *Registry) getPaginatedJSON(url string, response interface{}) (string, error) {
-	resp, err := registry.Client.Get(url)
+func getPaginatedJSON(ctx context.Context, client *http.Client, registry *url.URL, u *url.URL, response interface{}) (*url.URL, error) {
+	creds := registry.User
+	if u.Host != registry.Host {
+		creds = nil
+	}
+	resp, err := do(ctx, client, creds, &http.Request{
+		Method: http.MethodGet,
+		URL:    u,
+	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	decoder := json.NewDecoder(resp.Body)
-	err = decoder.Decode(response)
+	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("parse %s response: %w", u.Redacted(), err)
 	}
-	return getNextLink(resp)
+	if err := json.Unmarshal(data, response); err != nil {
+		return nil, fmt.Errorf("parse %s response: %w", u.Redacted(), err)
+	}
+	return getNextLink(resp.Header), nil
 }
 
 // Matches an RFC 5988 (https://tools.ietf.org/html/rfc5988#section-5)
@@ -43,12 +51,16 @@ func (registry *Registry) getPaginatedJSON(url string, response interface{}) (st
 // `rel="next"` may not have quoted values in the wild.
 var nextLinkRE = regexp.MustCompile(`^ *<?([^;>]+)>? *(?:;[^;]*)*; *rel="?next"?(?:;.*)?`)
 
-func getNextLink(resp *http.Response) (string, error) {
-	for _, link := range resp.Header[http.CanonicalHeaderKey("Link")] {
+func getNextLink(hdr http.Header) *url.URL {
+	for _, link := range hdr[http.CanonicalHeaderKey("Link")] {
 		parts := nextLinkRE.FindStringSubmatch(link)
 		if parts != nil {
-			return parts[1], nil
+			u, err := url.Parse(parts[1])
+			if err != nil {
+				continue
+			}
+			return u
 		}
 	}
-	return "", ErrNoMorePages
+	return nil
 }

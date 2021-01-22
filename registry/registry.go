@@ -5,98 +5,112 @@
 package registry
 
 import (
-	"crypto/tls"
+	"bytes"
+	"context"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"mime"
 	"net/http"
+	"net/url"
 	"strings"
+
+	"github.com/yourbase/commons/http/headers"
 )
 
-type Registry struct {
-	URL    string
-	Client *http.Client
+func Ping(ctx context.Context, client *http.Client, registry *url.URL) error {
+	resp, err := do(ctx, client, registry.User, &http.Request{
+		Method: http.MethodGet,
+		URL:    newURL(registry, "/v2/"),
+	})
+	if err != nil {
+		return fmt.Errorf("ping registry: %w", err)
+	}
+	resp.Body.Close()
+	return nil
 }
 
-/*
- * Create a new Registry with the given URL and credentials, then Ping()s it
- * before returning it to verify that the registry is available.
- *
- * You can, alternately, construct a Registry manually by populating the fields.
- * This passes http.DefaultTransport to WrapTransport when creating the
- * http.Client.
- */
-func New(registryURL, username, password string) (*Registry, error) {
-	transport := http.DefaultTransport
-
-	return newFromTransport(registryURL, username, password, transport)
+func newURL(registry *url.URL, path string) *url.URL {
+	newURL := new(url.URL)
+	*newURL = *registry
+	newURL.User = nil
+	newURL.Path = strings.TrimSuffix(registry.Path, "/") + path
+	return newURL
 }
 
-/*
- * Create a new Registry, as with New, using an http.Transport that disables
- * SSL certificate verification.
- */
-func NewInsecure(registryURL, username, password string) (*Registry, error) {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			// TODO: Why?
-			InsecureSkipVerify: true, //nolint:gosec
-		},
+func do(ctx context.Context, client *http.Client, creds *url.Userinfo, req *http.Request) (resp *http.Response, err error) {
+	username := creds.Username()
+	password, _ := creds.Password()
+	if username == "" && password == "" {
+		req = req.WithContext(ctx)
+	} else {
+		req = req.Clone(ctx)
+		if req.Header == nil {
+			req.Header = make(http.Header)
+		}
+		req.SetBasicAuth(username, password)
 	}
 
-	return newFromTransport(registryURL, username, password, transport)
-}
-
-/*
- * Given an existing http.RoundTripper such as http.DefaultTransport, build the
- * transport stack necessary to authenticate to the Docker registry API. This
- * adds in support for OAuth bearer tokens and HTTP Basic auth, and sets up
- * error handling this library relies on.
- */
-func WrapTransport(transport http.RoundTripper, url, username, password string) http.RoundTripper {
-	tokenTransport := &TokenTransport{
-		Transport: transport,
-		Username:  username,
-		Password:  password,
-	}
-	basicAuthTransport := &BasicTransport{
-		Transport: tokenTransport,
-		URL:       url,
-		Username:  username,
-		Password:  password,
-	}
-	errorTransport := &ErrorTransport{
-		Transport: basicAuthTransport,
-	}
-	return errorTransport
-}
-
-func newFromTransport(registryURL, username, password string, transport http.RoundTripper) (*Registry, error) {
-	url := strings.TrimSuffix(registryURL, "/")
-	transport = WrapTransport(transport, url, username, password)
-	registry := &Registry{
-		URL: url,
-		Client: &http.Client{
-			Transport: transport,
-		},
-	}
-
-	if err := registry.Ping(); err != nil {
+	resp, err = client.Do(req)
+	if err != nil {
 		return nil, err
 	}
+	if authEndpoint := isTokenDemand(resp); authEndpoint != nil {
+		// Obtain auth token from endpoint indicated by registry.
+		resp.Body.Close()
+		if req.Body != nil && req.GetBody == nil {
+			return nil, fmt.Errorf("%s %s: authentication required, but cannot repeat request body", req.Method, req.URL.Redacted())
+		}
+		token, err := authenticate(ctx, client, authEndpoint, creds)
+		if err != nil {
+			return nil, err
+		}
 
-	return registry, nil
-}
-
-func (r *Registry) url(pathTemplate string, args ...interface{}) string {
-	pathSuffix := fmt.Sprintf(pathTemplate, args...)
-	url := fmt.Sprintf("%s%s", r.URL, pathSuffix)
-	return url
-}
-
-func (r *Registry) Ping() error {
-	url := r.url("/v2/")
-	resp, err := r.Client.Get(url)
-	if resp != nil {
-		defer resp.Body.Close()
+		// Retry request.
+		req = req.Clone(ctx)
+		if req.Body != nil {
+			var err error
+			req.Body, err = req.GetBody()
+			if err != nil {
+				return nil, fmt.Errorf("%s %s: retry with authentication: %w", req.Method, req.URL.Redacted(), err)
+			}
+		}
+		req.Header.Set(headers.Authorization, "Bearer "+token)
+		resp, err = client.Do(req)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return err
+	if resp.StatusCode >= 400 {
+		err := newHTTPStatusError(resp)
+		resp.Body.Close()
+		return nil, fmt.Errorf("%s %s: %w", req.Method, req.URL.Redacted(), err)
+	}
+	return resp, nil
 }
+
+type HTTPStatusError struct {
+	Status      string
+	StatusCode  int
+	ContentType string
+	Body        []byte
+}
+
+func newHTTPStatusError(resp *http.Response) *HTTPStatusError {
+	body, _ := ioutil.ReadAll(io.LimitReader(resp.Body, 8*1024)) // 8 KiB max
+	return &HTTPStatusError{
+		Status:      resp.Status,
+		StatusCode:  resp.StatusCode,
+		ContentType: resp.Header.Get(headers.ContentType),
+		Body:        body,
+	}
+}
+
+func (e *HTTPStatusError) Error() string {
+	if mt, _, err := mime.ParseMediaType(e.ContentType); err == nil && mt == "text/plain" {
+		return fmt.Sprintf("http %s: %s", e.Status, bytes.TrimSpace(e.Body))
+	}
+	return "http " + e.Status
+}
+
+var _ error = &HTTPStatusError{}

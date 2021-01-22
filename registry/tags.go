@@ -4,25 +4,24 @@
 
 package registry
 
-type tagsResponse struct {
-	Tags []string `json:"tags"`
-}
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+)
 
-func (registry *Registry) Tags(repository string) (tags []string, err error) {
-	url := registry.url("/v2/%s/tags/list", repository)
-
-	var response tagsResponse
-	for {
-		url, err = registry.getPaginatedJSON(url, &response)
-		switch err {
-		case ErrNoMorePages:
-			tags = append(tags, response.Tags...)
-			return tags, nil
-		case nil:
-			tags = append(tags, response.Tags...)
-			continue
-		default:
-			return nil, err
+func Tags(ctx context.Context, client *http.Client, registry *url.URL, repository string) (tags []string, err error) {
+	u := newURL(registry, fmt.Sprintf("/v2/%s/tags/list", repository))
+	for u != nil {
+		var response struct {
+			Tags []string `json:"tags"`
+		}
+		u, err = getPaginatedJSON(ctx, client, registry, u, &response)
+		tags = append(tags, response.Tags...)
+		if err != nil {
+			return nil, fmt.Errorf("list tags for %s in %s: %w", repository, registry.Redacted(), err)
 		}
 	}
+	return tags, nil
 }
