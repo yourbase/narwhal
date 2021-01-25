@@ -8,10 +8,11 @@ require (
 	github.com/fsouza/go-dockerclient v1.6.0
 	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/google/go-cmp v0.4.1
+	github.com/gorilla/mux v1.7.3
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sirupsen/logrus v1.6.0 // indirect
-	github.com/yourbase/commons v0.1.0
+	github.com/yourbase/commons v0.9.0
 	golang.org/x/sys v0.0.0-20200610111108-226ff32320da // indirect
 	google.golang.org/genproto v0.0.0-20200610104632-a5b850bcf112 // indirect
 	google.golang.org/grpc v1.29.1 // indirect
