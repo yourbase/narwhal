@@ -5,87 +5,48 @@
 package registry
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/url"
 )
 
-type TokenTransport struct {
-	Transport http.RoundTripper
-	Username  string
-	Password  string
-}
-
-func (t *TokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := t.Transport.RoundTrip(req)
+func authenticate(ctx context.Context, client *http.Client, endpoint *authEndpoint, creds *url.Userinfo) (string, error) {
+	authReq, err := endpoint.NewRequest(creds)
 	if err != nil {
-		return resp, err
+		return "", fmt.Errorf("authenticate to registry: %w", err)
 	}
-	if authService := isTokenDemand(resp); authService != nil {
-		resp.Body.Close()
-		resp, err = t.authAndRetry(authService, req)
-	}
-	return resp, err
-}
-
-type authToken struct {
-	Token string `json:"token"`
-}
-
-func (t *TokenTransport) authAndRetry(authService *authService, req *http.Request) (*http.Response, error) {
-	token, authResp, err := t.auth(authService)
+	response, err := client.Do(authReq.WithContext(ctx))
 	if err != nil {
-		return authResp, err
-	}
-
-	retryResp, err := t.retry(req, token)
-	return retryResp, err
-}
-
-func (t *TokenTransport) auth(authService *authService) (string, *http.Response, error) {
-	authReq, err := authService.Request(t.Username, t.Password)
-	if err != nil {
-		return "", nil, err
-	}
-
-	client := http.Client{
-		Transport: t.Transport,
-	}
-
-	response, err := client.Do(authReq)
-	if err != nil {
-		return "", nil, err
-	}
-
-	if response.StatusCode != http.StatusOK {
-		return "", response, err
+		return "", fmt.Errorf("authenticate to registry: %w", err)
 	}
 	defer response.Body.Close()
-
-	var authToken authToken
-	decoder := json.NewDecoder(response.Body)
-	err = decoder.Decode(&authToken)
-	if err != nil {
-		return "", nil, err
+	if response.StatusCode != http.StatusOK {
+		err := newHTTPStatusError(response)
+		return "", fmt.Errorf("%s %s: %w", authReq.Method, authReq.URL.Redacted(), err)
 	}
-
-	return authToken.Token, nil, nil
+	responseData, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return "", fmt.Errorf("authenticate to registry: %w", err)
+	}
+	var authToken struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(responseData, &authToken); err != nil {
+		return "", fmt.Errorf("authenticate to registry: %w", err)
+	}
+	return authToken.Token, nil
 }
 
-func (t *TokenTransport) retry(req *http.Request, token string) (*http.Response, error) {
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	resp, err := t.Transport.RoundTrip(req)
-	return resp, err
-}
-
-type authService struct {
+type authEndpoint struct {
 	Realm   string
 	Service string
 	Scope   string
 }
 
-func (authService *authService) Request(username, password string) (*http.Request, error) {
+func (authService *authEndpoint) NewRequest(creds *url.Userinfo) (*http.Request, error) {
 	url, err := url.Parse(authService.Realm)
 	if err != nil {
 		return nil, err
@@ -98,30 +59,34 @@ func (authService *authService) Request(username, password string) (*http.Reques
 	}
 	url.RawQuery = q.Encode()
 
-	request, err := http.NewRequest("GET", url.String(), nil)
-
-	if username != "" || password != "" {
-		request.SetBasicAuth(username, password)
+	req := &http.Request{
+		Method: http.MethodGet,
+		URL:    url,
 	}
-
-	return request, err
+	username := creds.Username()
+	password, _ := creds.Password()
+	if username != "" && password != "" {
+		req.Header = make(http.Header)
+		req.SetBasicAuth(username, password)
+	}
+	return req, nil
 }
 
-func isTokenDemand(resp *http.Response) *authService {
+func isTokenDemand(resp *http.Response) *authEndpoint {
 	if resp == nil {
 		return nil
 	}
 	if resp.StatusCode != http.StatusUnauthorized {
 		return nil
 	}
-	return parseOauthHeader(resp)
+	return parseOAuthHeader(resp)
 }
 
-func parseOauthHeader(resp *http.Response) *authService {
+func parseOAuthHeader(resp *http.Response) *authEndpoint {
 	challenges := parseAuthHeader(resp.Header)
 	for _, challenge := range challenges {
 		if challenge.Scheme == "bearer" {
-			return &authService{
+			return &authEndpoint{
 				Realm:   challenge.Parameters["realm"],
 				Service: challenge.Parameters["service"],
 				Scope:   challenge.Parameters["scope"],

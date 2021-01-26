@@ -4,26 +4,24 @@
 
 package registry
 
-type repositoriesResponse struct {
-	Repositories []string `json:"repositories"`
-}
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+)
 
-func (registry *Registry) Repositories() ([]string, error) {
-	url := registry.url("/v2/_catalog")
-	repos := make([]string, 0, 10)
-	var err error //We create this here, otherwise url will be rescoped with :=
-	var response repositoriesResponse
-	for {
-		url, err = registry.getPaginatedJSON(url, &response)
-		switch err {
-		case ErrNoMorePages:
-			repos = append(repos, response.Repositories...)
-			return repos, nil
-		case nil:
-			repos = append(repos, response.Repositories...)
-			continue
-		default:
-			return nil, err
+func Repositories(ctx context.Context, client *http.Client, registry *url.URL) (repos []string, err error) {
+	u := newURL(registry, "/v2/_catalog")
+	for u != nil {
+		var response struct {
+			Repositories []string `json:"repositories"`
+		}
+		u, err = getPaginatedJSON(ctx, client, registry, u, &response)
+		repos = append(repos, response.Repositories...)
+		if err != nil {
+			return nil, fmt.Errorf("list repositories in %s: %w", registry.Redacted(), err)
 		}
 	}
+	return repos, nil
 }

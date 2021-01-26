@@ -5,102 +5,110 @@
 package registry
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"net/url"
 
 	"github.com/docker/distribution"
 	digest "github.com/opencontainers/go-digest"
+	"github.com/yourbase/commons/http/headers"
 )
 
-func (registry *Registry) DownloadBlob(repository string, digest digest.Digest) (io.ReadCloser, error) {
-	url := registry.url("/v2/%s/blobs/%s", repository, digest)
-
-	resp, err := registry.Client.Get(url)
+func DownloadBlob(ctx context.Context, client *http.Client, registry *url.URL, repository string, digest digest.Digest) (io.ReadCloser, error) {
+	resp, err := do(ctx, client, registry.User, &http.Request{
+		Method: http.MethodGet,
+		URL:    blobURL(registry, repository, digest),
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("download blob %v from %s/%s: %w", digest, registry.Redacted(), repository, err)
 	}
-
 	return resp.Body, nil
 }
 
-func (registry *Registry) UploadBlob(repository string, digest digest.Digest, content io.Reader) error {
-	uploadURL, err := registry.initiateUpload(repository)
+func blobURL(registry *url.URL, repository string, digest digest.Digest) *url.URL {
+	return newURL(registry, fmt.Sprintf("/v2/%s/blobs/%s", repository, digest))
+}
+
+func UploadBlob(ctx context.Context, client *http.Client, registry *url.URL, repository string, digest digest.Digest, content io.Reader) error {
+	uploadURL, err := initiateUpload(ctx, client, registry, repository)
 	if err != nil {
-		return err
+		return fmt.Errorf("upload blob %v to %s/%s: %w", digest, registry.Redacted(), repository, err)
 	}
 	q := uploadURL.Query()
 	q.Set("digest", digest.String())
 	uploadURL.RawQuery = q.Encode()
 
-	upload, err := http.NewRequest("PUT", uploadURL.String(), content)
+	resp, err := do(ctx, client, registry.User, &http.Request{
+		Method: http.MethodPut,
+		URL:    uploadURL,
+		Header: http.Header{
+			headers.ContentType: {"application/octet-stream"},
+		},
+		Body: ioutil.NopCloser(content),
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("upload blob %v to %s/%s: %w", digest, registry.Redacted(), repository, err)
 	}
-	upload.Header.Set("Content-Type", "application/octet-stream")
-
-	_, err = registry.Client.Do(upload)
-	return err
+	resp.Body.Close()
+	return nil
 }
 
-func (registry *Registry) HasBlob(repository string, digest digest.Digest) (bool, error) {
-	checkURL := registry.url("/v2/%s/blobs/%s", repository, digest)
-
-	resp, err := registry.Client.Head(checkURL)
-	if resp != nil {
-		defer resp.Body.Close()
-	}
-	if err == nil {
-		return resp.StatusCode == http.StatusOK, nil
-	}
-
-	urlErr, ok := err.(*url.Error)
-	if !ok {
-		return false, err
-	}
-	httpErr, ok := urlErr.Err.(*HTTPStatusError)
-	if !ok {
-		return false, err
-	}
-	if httpErr.Response.StatusCode == http.StatusNotFound {
+func HasBlob(ctx context.Context, client *http.Client, registry *url.URL, repository string, digest digest.Digest) (bool, error) {
+	resp, err := do(ctx, client, registry.User, &http.Request{
+		Method: http.MethodHead,
+		URL:    blobURL(registry, repository, digest),
+	})
+	if httpErr := (*HTTPStatusError)(nil); errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
 		return false, nil
 	}
-
-	return false, err
+	if err != nil {
+		return false, fmt.Errorf("check for blob %v in %s/%s: %w", digest, registry.Redacted(), repository, err)
+	}
+	resp.Body.Close()
+	return true, nil
 }
 
-func (registry *Registry) BlobMetadata(repository string, digest digest.Digest) (distribution.Descriptor, error) {
-	checkURL := registry.url("/v2/%s/blobs/%s", repository, digest)
-
-	resp, err := registry.Client.Head(checkURL)
-	if resp != nil {
-		defer resp.Body.Close()
-	}
+func BlobMetadata(ctx context.Context, client *http.Client, registry *url.URL, repository string, digest digest.Digest) (distribution.Descriptor, error) {
+	resp, err := do(ctx, client, registry.User, &http.Request{
+		Method: http.MethodHead,
+		URL:    blobURL(registry, repository, digest),
+	})
 	if err != nil {
-		return distribution.Descriptor{}, err
+		return distribution.Descriptor{}, fmt.Errorf("get blob %v metadata in %s/%s: %w", digest, registry.Redacted(), repository, err)
 	}
-
+	resp.Body.Close()
 	return distribution.Descriptor{
 		Digest: digest,
 		Size:   resp.ContentLength,
 	}, nil
 }
 
-func (registry *Registry) initiateUpload(repository string) (*url.URL, error) {
-	initiateURL := registry.url("/v2/%s/blobs/uploads/", repository)
-
-	resp, err := registry.Client.Post(initiateURL, "application/octet-stream", nil)
-	if resp != nil {
-		defer resp.Body.Close()
-	}
+func initiateUpload(ctx context.Context, client *http.Client, registry *url.URL, repository string) (*url.URL, error) {
+	u := newURL(registry, fmt.Sprintf("/v2/%s/blobs/uploads/", repository))
+	resp, err := do(ctx, client, registry.User, &http.Request{
+		Method: http.MethodPost,
+		URL:    u,
+		Header: http.Header{
+			headers.ContentType:   {"application/octet-stream"},
+			headers.ContentLength: {"0"},
+		},
+		Body: ioutil.NopCloser(new(bytes.Reader)),
+		GetBody: func() (io.ReadCloser, error) {
+			return ioutil.NopCloser(new(bytes.Reader)), nil
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	location := resp.Header.Get("Location")
-	locationURL, err := url.Parse(location)
+	resp.Body.Close()
+	locationURL, err := url.Parse(resp.Header.Get(headers.Location))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("post %s: parse %s: %w", u, headers.Location, err)
 	}
 	return locationURL, nil
 }

@@ -4,10 +4,12 @@
 package registry
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,12 +24,13 @@ import (
 func TestPing(t *testing.T) {
 	srv := httptest.NewServer(new(fakeRegistry))
 	t.Cleanup(srv.Close)
-	client, err := New(srv.URL, "", "")
+	ctx := context.Background()
+	registry, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := client.Ping(); err != nil {
+	if err := Ping(ctx, srv.Client(), registry); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -40,12 +43,13 @@ func TestRepositories(t *testing.T) {
 			},
 		})
 		t.Cleanup(srv.Close)
-		client, err := New(srv.URL, "", "")
+		ctx := context.Background()
+		registry, err := url.Parse(srv.URL)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		got, err := client.Repositories()
+		got, err := Repositories(ctx, srv.Client(), registry)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,12 +71,14 @@ func TestRepositories(t *testing.T) {
 			wwwAuthenticate: auth.wwwAuthenticateHeader(authSrv.URL),
 		})
 		t.Cleanup(srv.Close)
-		client, err := New(srv.URL, auth.username, auth.password)
+		ctx := context.Background()
+		registry, err := url.Parse(srv.URL)
 		if err != nil {
 			t.Fatal(err)
 		}
+		registry.User = url.UserPassword(auth.username, auth.password)
 
-		got, err := client.Repositories()
+		got, err := Repositories(ctx, srv.Client(), registry)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -106,13 +112,14 @@ func TestTags(t *testing.T) {
 			},
 		})
 		t.Cleanup(srv.Close)
-		client, err := New(srv.URL, "", "")
+		ctx := context.Background()
+		registry, err := url.Parse(srv.URL)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		for _, test := range tests {
-			got, err := client.Tags(test.repository)
+			got, err := Tags(ctx, srv.Client(), registry, test.repository)
 			if !cmp.Equal(test.want, got) || (err != nil) != test.wantError {
 				errString := "<nil>"
 				if test.wantError {
@@ -135,13 +142,15 @@ func TestTags(t *testing.T) {
 			wwwAuthenticate: auth.wwwAuthenticateHeader(authSrv.URL),
 		})
 		t.Cleanup(srv.Close)
-		client, err := New(srv.URL, auth.username, auth.password)
+		ctx := context.Background()
+		registry, err := url.Parse(srv.URL)
 		if err != nil {
 			t.Fatal(err)
 		}
+		registry.User = url.UserPassword(auth.username, auth.password)
 
 		for _, test := range tests {
-			got, err := client.Tags(test.repository)
+			got, err := Tags(ctx, srv.Client(), registry, test.repository)
 			if !cmp.Equal(test.want, got) || (err != nil) != test.wantError {
 				errString := "<nil>"
 				if test.wantError {
