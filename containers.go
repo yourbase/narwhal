@@ -36,6 +36,7 @@ import (
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/yourbase/commons/xcontext"
 	"github.com/yourbase/narwhal/internal/imageref"
+	"golang.org/x/sync/errgroup"
 	"zombiezen.com/go/log"
 )
 
@@ -360,7 +361,17 @@ func StartContainer(ctx context.Context, client *docker.Client, containerID stri
 			return fmt.Errorf("start container %s: wait check port %d not exposed", containerID, healthCheckPort)
 		}
 	}
-	if err := waitForTCPPort(ctx, healthCheckAddr.String()); err != nil {
+	waitCtx, cancelWait := context.WithCancel(ctx)
+	grp, grpCtx := errgroup.WithContext(waitCtx)
+	grp.Go(func() error {
+		return checkForExit(grpCtx, client, containerID)
+	})
+	grp.Go(func() error {
+		err := waitForTCPPort(grpCtx, healthCheckAddr.String())
+		cancelWait() // stop checking for exit, even if we succeed
+		return err
+	})
+	if err := grp.Wait(); err != nil {
 		return fmt.Errorf("start container %s: %w", containerID, err)
 	}
 	return nil
@@ -381,6 +392,42 @@ func waitForTCPPort(ctx context.Context, addr string) error {
 		case <-ticker.C:
 		case <-ctx.Done():
 			return fmt.Errorf("wait for %q: %w", addr, err)
+		}
+	}
+}
+
+// checkForExit returns an error if the container stops running before
+// the Context is Done.
+func checkForExit(ctx context.Context, client *docker.Client, containerID string) error {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		inspectCtx, cancelInspect := xcontext.KeepAlive(ctx, 30*time.Second)
+		isRunning, err := IsRunning(inspectCtx, client, containerID)
+		cancelInspect()
+		if err != nil {
+			return err
+		}
+		if !isRunning {
+			output := new(strings.Builder)
+			client.Logs(docker.LogsOptions{
+				Context:      ctx,
+				Container:    containerID,
+				Stdout:       true,
+				Stderr:       true,
+				OutputStream: output,
+				ErrorStream:  output,
+			})
+			if output.Len() == 0 {
+				return fmt.Errorf("container %s stopped running", containerID)
+			}
+			return fmt.Errorf("container %s stopped running:\n%s", containerID, strings.TrimSuffix(output.String(), "\n"))
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return nil
 		}
 	}
 }
