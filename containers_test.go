@@ -47,41 +47,88 @@ func TestMain(m *testing.M) {
 }
 
 func TestHealthCheck(t *testing.T) {
-	ctx := testlog.WithTB(context.Background(), t)
-	client := DockerClient()
-	const healthCheckPort = 6379
-	containerID, err := CreateContainer(ctx, client, os.Stdout, &ContainerDefinition{
-		Label:           "narwhal-health-check",
-		Image:           "redis:6.0.9",
-		HealthCheckPort: healthCheckPort,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() {
-		err := client.StopContainerWithContext(containerID, 2, ctx)
-		if err != nil {
-			t.Logf("stopping container %s: %v", containerID, err)
-		}
-		err = client.RemoveContainer(docker.RemoveContainerOptions{
-			Context: ctx,
-			ID:      containerID,
-			Force:   true,
+	t.Run("Success", func(t *testing.T) {
+		ctx := testlog.WithTB(context.Background(), t)
+		client := DockerClient()
+		const healthCheckPort = 6379
+		containerID, err := CreateContainer(ctx, client, os.Stdout, &ContainerDefinition{
+			Label:           "narwhal-health-check",
+			Image:           "redis:6.0.9",
+			HealthCheckPort: healthCheckPort,
 		})
 		if err != nil {
-			t.Logf("removing container %s: %v", containerID, err)
+			t.Fatal(err)
 		}
-	}()
 
-	err = StartContainer(ctx, client, containerID, healthCheckPort)
-	if err != nil {
-		t.Fatal(err)
-	}
+		defer func() {
+			err := client.StopContainerWithContext(containerID, 2, ctx)
+			if err != nil {
+				t.Logf("stopping container %s: %v", containerID, err)
+			}
+			err = client.RemoveContainer(docker.RemoveContainerOptions{
+				Context: ctx,
+				ID:      containerID,
+				Force:   true,
+			})
+			if err != nil {
+				t.Logf("removing container %s: %v", containerID, err)
+			}
+		}()
 
-	if running, err := IsRunning(ctx, client, containerID); !running {
-		t.Fatalf("Container %s didn't start, but should have, as StartContainer was called:\n%v", containerID, err)
-	}
+		err = StartContainer(ctx, client, containerID, healthCheckPort)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if running, err := IsRunning(ctx, client, containerID); !running {
+			t.Fatalf("Container %s didn't start, but should have, as StartContainer was called:\n%v", containerID, err)
+		}
+	})
+
+	t.Run("EarlyExit", func(t *testing.T) {
+		ctx := testlog.WithTB(context.Background(), t)
+		client := DockerClient()
+		const healthCheckPort = 6379
+		const wantStdout = "xyzzy"
+		const wantStderr = "magik"
+		containerID, err := CreateContainer(ctx, client, os.Stdout, &ContainerDefinition{
+			Label:           "narwhal-health-check-exit",
+			Image:           "yourbase/yb_ubuntu:18.04",
+			Argv:            []string{"bash", "-c", fmt.Sprintf("echo '%s' ; echo '%s' 1>&2 ; exit 1", wantStdout, wantStderr)},
+			HealthCheckPort: healthCheckPort,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		defer func() {
+			err := client.StopContainerWithContext(containerID, 2, ctx)
+			if err != nil {
+				t.Logf("stopping container %s: %v", containerID, err)
+			}
+			err = client.RemoveContainer(docker.RemoveContainerOptions{
+				Context: ctx,
+				ID:      containerID,
+				Force:   true,
+			})
+			if err != nil {
+				t.Logf("removing container %s: %v", containerID, err)
+			}
+		}()
+
+		err = StartContainer(ctx, client, containerID, healthCheckPort)
+		if err == nil {
+			t.Fatal("StartContainer did not return an error")
+		}
+
+		got := err.Error()
+		if !strings.Contains(got, wantStdout) {
+			t.Errorf("output = %q; does not contain stdout phrase %q", got, wantStdout)
+		}
+		if !strings.Contains(got, wantStderr) {
+			t.Errorf("output = %q; does not contain stderr phrase %q", got, wantStderr)
+		}
+	})
 }
 
 func TestSanitizeContainerName(t *testing.T) {
